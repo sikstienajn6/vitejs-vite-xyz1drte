@@ -24,9 +24,7 @@ import {
   Trash2, 
   ChevronRight, 
   ChevronDown,
-  Activity,
   Calendar,
-  Target,
   Clock
 } from 'lucide-react';
 
@@ -96,7 +94,6 @@ export default function App() {
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState('dashboard'); 
-  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
 
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
@@ -344,6 +341,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
       
+      {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
         <div className="flex items-center gap-2 text-blue-500">
           {/* Logo area */}
