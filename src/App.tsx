@@ -73,10 +73,10 @@ interface WeeklySummary {
 const getWeekKey = (date: string) => {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
-  const week1 = new Date(d.getFullYear(), 0, 4);
-  const weekNum = 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-  return `${d.getFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
 const formatDate = (dateString: string) => {
@@ -94,9 +94,12 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   
   const [weightInput, setWeightInput] = useState('');
+  // Initial date is today
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState('dashboard'); 
-  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
+  
+  // Changed to array for multiple expanded items
+  const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
 
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
 
@@ -104,7 +107,6 @@ export default function App() {
   useEffect(() => {
     let isMounted = true;
     signInAnonymously(auth).catch(() => {
-        // Error suppressed or handled silently
         if (isMounted) setUserId("demo-user-fallback");
     });
 
@@ -177,6 +179,7 @@ export default function App() {
       groups[weekKey].push(entry);
     });
 
+    // Sort keys so we process chronologically (oldest to newest)
     let processed = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
@@ -188,28 +191,34 @@ export default function App() {
         weekLabel: formatDate(earliestDate),
         actual: avg,
         count: entries.length,
-        entries: entries
+        entries: entries,
+        target: 0, // placeholder
+        delta: 0,  // placeholder
+        hasPrev: false
       };
     });
 
     if (processed.length > 0) {
-      const anchorWeight = processed[0].actual; 
       const rate = parseFloat(settings.weeklyRate.toString()) || 0;
       
-      return processed.map((p, i) => {
-        const prevActual = i > 0 ? processed[i-1].actual : null;
-        const weeklyDiff = prevActual !== null ? p.actual - prevActual : 0;
-
-        return {
-          ...p,
-          target: anchorWeight + (rate * i),
-          delta: weeklyDiff,
-          hasPrev: prevActual !== null
-        };
-      });
+      // Logic: Target for current week = Previous Week Actual + Rate
+      // First week target = First week actual
+      
+      for (let i = 0; i < processed.length; i++) {
+        if (i === 0) {
+            processed[i].target = processed[i].actual;
+            processed[i].delta = 0;
+            processed[i].hasPrev = false;
+        } else {
+            const prevActual = processed[i-1].actual;
+            processed[i].target = prevActual + rate;
+            processed[i].delta = processed[i].actual - prevActual;
+            processed[i].hasPrev = true;
+        }
+      }
     }
 
-    return [];
+    return processed;
   }, [weights, settings]);
 
   const currentWeeklyDiff = useMemo(() => {
@@ -265,7 +274,27 @@ export default function App() {
   };
 
   const toggleWeek = (weekId: string) => {
-    setExpandedWeek(expandedWeek === weekId ? null : weekId);
+    setExpandedWeeks(prev => 
+      prev.includes(weekId) 
+        ? prev.filter(id => id !== weekId) 
+        : [...prev, weekId]
+    );
+  };
+
+  // Helper for dynamic color coding
+  const getDeltaColor = (delta: number) => {
+    const rate = parseFloat(settings?.weeklyRate.toString() || '0');
+    const isBulking = rate >= 0;
+    
+    if (delta === 0) return 'text-slate-500';
+    
+    if (isBulking) {
+        // Bulking: Positive delta is good (Green), Negative is bad (Red)
+        return delta > 0 ? 'text-emerald-400' : 'text-rose-400';
+    } else {
+        // Cutting: Negative delta is good (Green), Positive is bad (Red)
+        return delta < 0 ? 'text-emerald-400' : 'text-rose-400';
+    }
   };
 
   const SimpleChart = ({ data }: { data: any[] }) => {
@@ -294,7 +323,6 @@ export default function App() {
     return (
       <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-          {/* Darker Grid Lines */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
@@ -328,8 +356,7 @@ export default function App() {
       {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
         <div className="flex items-center gap-2 text-blue-500">
-          <Activity size={24} />
-          <h1 className="font-bold text-lg tracking-tight text-white">RateTracker</h1>
+          {/* Removed Text and Logo */}
         </div>
         <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
           <Settings size={20} className="text-slate-400" />
@@ -350,27 +377,12 @@ export default function App() {
               </div>
               <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
                 <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week</p>
-                <div className={`flex items-center gap-1 text-lg font-bold truncate ${currentWeeklyDiff < 0 ? 'text-emerald-400' : currentWeeklyDiff > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                <div className={`flex items-center gap-1 text-lg font-bold truncate ${getDeltaColor(currentWeeklyDiff)}`}>
                   {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
                   {Math.abs(currentWeeklyDiff).toFixed(2)} kg
                 </div>
               </div>
             </div>
-
-            {settings && weeklyData.length > 0 && (
-               <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-sm gap-2 border border-slate-700">
-                  <div className="flex items-center gap-2">
-                     <Target size={16} className="text-blue-400 shrink-0" />
-                     <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
-                  </div>
-                  <span className="text-slate-400 whitespace-nowrap">Target: {weeklyData[weeklyData.length-1].target.toFixed(1)} kg</span>
-               </div>
-            )}
-            {settings && weeklyData.length === 0 && (
-               <div className="bg-blue-900/20 text-blue-300 border border-blue-900/50 px-4 py-3 rounded-xl text-sm shadow-sm text-center">
-                 Start logging weights to initialize your trendline.
-               </div>
-            )}
 
             <section>
               <h2 className="text-sm font-semibold text-slate-300 mb-2 ml-1">Trend Adherence</h2>
@@ -427,7 +439,7 @@ export default function App() {
 
                 <div className="divide-y divide-slate-800">
                   {weeklyData.slice().reverse().map((item) => {
-                    const isExpanded = expandedWeek === item.weekId;
+                    const isExpanded = expandedWeeks.includes(item.weekId);
                     return (
                       <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
                         <div 
@@ -443,7 +455,7 @@ export default function App() {
                             {item.actual.toFixed(1)}
                           </div>
                           
-                          <div className={`text-right font-bold text-xs ${!item.hasPrev ? 'text-slate-600' : item.delta > 0 ? 'text-rose-400' : item.delta < 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                          <div className={`text-right font-bold text-xs ${!item.hasPrev ? 'text-slate-600' : getDeltaColor(item.delta)}`}>
                             {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(1)}` : item.delta.toFixed(1)) : '-'}
                           </div>
 
@@ -492,7 +504,7 @@ export default function App() {
         )}
 
         {view === 'settings' && (
-           <div className="space-y-4">
+           <div className="space-y-4 w-full">
             <div className="flex items-center gap-2 mb-4">
                 <button onClick={() => setView('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
                     <ChevronRight className="rotate-180 text-slate-400" size={20} />
@@ -500,7 +512,7 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5">
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full">
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
                     <div className="relative">
