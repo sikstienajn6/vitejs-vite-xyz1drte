@@ -2,8 +2,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInWithRedirect, // Changed from signInWithPopup
-  getRedirectResult,  // Needed to read the result after redirect
+  signInWithRedirect, 
+  getRedirectResult,
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
@@ -38,7 +38,7 @@ import {
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
-  apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE",
+  apiKey: "AIzaSyBxmZxjDUpeOUPWFD_Bg-dOP4J4_F3R1rE",
   authDomain: "weighttracker-b4b79.firebaseapp.com",
   projectId: "weighttracker-b4b79",
   storageBucket: "weighttracker-b4b79.firebasestorage.app",
@@ -111,9 +111,14 @@ export default function App() {
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
 
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
+  const [isRedirecting, setIsRedirecting] = useState(false); 
 
   // --- AUTH AND REDIRECT HANDLING ---
   useEffect(() => {
+    // Check local storage for redirect flag
+    const redirecting = localStorage.getItem('isRedirecting') === 'true';
+    if (redirecting) setIsRedirecting(true);
+
     // 1. Handle incoming redirect result first
     getRedirectResult(auth)
       .then((result) => {
@@ -125,6 +130,10 @@ export default function App() {
         console.error("Redirect failed:", error);
       })
       .finally(() => {
+        // Clear flag regardless of success/failure
+        localStorage.removeItem('isRedirecting');
+        setIsRedirecting(false);
+
         // 2. Set up standard auth listener
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
             setUser(currentUser);
@@ -137,10 +146,11 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     try {
-      // Initiates the redirect
+      // Set flag before redirect
+      localStorage.setItem('isRedirecting', 'true');
       await signInWithRedirect(auth, googleProvider);
-      // NOTE: Code stops execution here as browser navigates away
     } catch (error) {
+      localStorage.removeItem('isRedirecting');
       console.error("Login initiation failed:", error);
       alert("Login initiation failed. Check console.");
     }
@@ -356,31 +366,34 @@ export default function App() {
     );
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
+  if (loading || isRedirecting) return <div className="h-screen w-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
-  // --- LOGIN SCREEN ---
+  // --- LOGIN SCREEN (Fixed to full screen width) ---
   if (!user) return (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
-        <div className="mb-8">
+    <div className="min-h-screen w-screen bg-slate-950 grid place-items-center p-6">
+        <div className="max-w-xs text-center">
             <Activity size={48} className="text-blue-500 mx-auto mb-4" />
             <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
             <p className="text-slate-400">Track your progress securely.</p>
+        
+            <div className="mt-8">
+                <button 
+                    onClick={handleGoogleLogin}
+                    className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full justify-center"
+                >
+                    <LogIn size={20} />
+                    Sign in with Google
+                </button>
+            </div>
+            <p className="text-xs text-slate-600 mt-8">
+                Your data is stored securely in the cloud.
+            </p>
         </div>
-        <button 
-            onClick={handleGoogleLogin}
-            className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full max-w-xs justify-center"
-        >
-            <LogIn size={20} />
-            Sign in with Google
-        </button>
-        <p className="text-xs text-slate-600 mt-8">
-            Your data is stored securely in the cloud.
-        </p>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20">
       
       {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
@@ -397,6 +410,7 @@ export default function App() {
         </div>
       </div>
 
+      {/* MAIN CONTENT AREA */}
       <div className="max-w-md mx-auto p-4 space-y-5">
         
         {view === 'dashboard' && (
@@ -552,6 +566,7 @@ export default function App() {
           </>
         )}
 
+        {/* SETTINGS SCREEN (Fixed to full screen width) */}
         {view === 'settings' && (
            <div className="space-y-4 w-full">
             <div className="flex items-center gap-2 mb-4">
