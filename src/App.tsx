@@ -46,7 +46,6 @@ const firebaseConfig = {
   storageBucket: "weighttracker-b4b79.firebasestorage.app",
   messagingSenderId: "895893600072",
   appId: "1:895893600072:web:e329aba69602d46fa8e57d",
-  measurementId: "G-N2CH917QQB"
 };
 
 window.firebaseConfig = firebaseConfig;
