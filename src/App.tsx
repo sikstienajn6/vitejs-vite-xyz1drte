@@ -8,7 +8,6 @@ import {
   signOut,
   onAuthStateChanged,
   setPersistence, // NEW IMPORT
-  browserSessionPersistence, // NEW IMPORT
   browserLocalPersistence, // NEW IMPORT
   type User 
 } from 'firebase/auth';
