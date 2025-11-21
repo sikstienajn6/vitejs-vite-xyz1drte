@@ -94,11 +94,9 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   
   const [weightInput, setWeightInput] = useState('');
-  // Initial date is today
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState('dashboard'); 
-  
-  // Changed to array for multiple expanded items
+  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
 
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
@@ -179,7 +177,6 @@ export default function App() {
       groups[weekKey].push(entry);
     });
 
-    // Sort keys so we process chronologically (oldest to newest)
     let processed = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
@@ -192,17 +189,14 @@ export default function App() {
         actual: avg,
         count: entries.length,
         entries: entries,
-        target: 0, // placeholder
-        delta: 0,  // placeholder
+        target: 0, 
+        delta: 0,
         hasPrev: false
       };
     });
 
     if (processed.length > 0) {
       const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-      
-      // Logic: Target for current week = Previous Week Actual + Rate
-      // First week target = First week actual
       
       for (let i = 0; i < processed.length; i++) {
         if (i === 0) {
@@ -281,7 +275,6 @@ export default function App() {
     );
   };
 
-  // Helper for dynamic color coding
   const getDeltaColor = (delta: number) => {
     const rate = parseFloat(settings?.weeklyRate.toString() || '0');
     const isBulking = rate >= 0;
@@ -289,10 +282,8 @@ export default function App() {
     if (delta === 0) return 'text-slate-500';
     
     if (isBulking) {
-        // Bulking: Positive delta is good (Green), Negative is bad (Red)
         return delta > 0 ? 'text-emerald-400' : 'text-rose-400';
     } else {
-        // Cutting: Negative delta is good (Green), Positive is bad (Red)
         return delta < 0 ? 'text-emerald-400' : 'text-rose-400';
     }
   };
@@ -353,10 +344,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
       
-      {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
         <div className="flex items-center gap-2 text-blue-500">
-          {/* Removed Text and Logo */}
+          {/* Logo area */}
         </div>
         <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
           <Settings size={20} className="text-slate-400" />
@@ -503,7 +493,7 @@ export default function App() {
           </>
         )}
 
-{view === 'settings' && (
+        {view === 'settings' && (
            <div className="space-y-4 w-full">
             <div className="flex items-center gap-2 mb-4">
                 <button onClick={() => setView('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
@@ -512,8 +502,7 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             {/* Removed 'flex' restrictions and added block display */}
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full block">
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full">
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
                     <div className="relative">
@@ -535,3 +524,7 @@ export default function App() {
              </form>
            </div>
         )}
+      </div>
+    </div>
+  );
+}
