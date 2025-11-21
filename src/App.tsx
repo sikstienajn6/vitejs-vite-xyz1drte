@@ -2,12 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInAnonymously, 
   signInWithPopup,
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
-  User
+  type User 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -78,10 +77,15 @@ interface WeeklySummary {
 
 // --- Helper Functions ---
 const getWeekKey = (date: string) => {
+  // Logic for Monday start (ISO 8601 week date)
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
+  // Set to nearest Thursday: current date + 4 - current day number
+  // Make Sunday's day number 7
   d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  // Get first day of year
   const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  // Calculate full weeks to nearest Thursday
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
@@ -127,8 +131,6 @@ export default function App() {
 
   const handleLogout = async () => {
     await signOut(auth);
-    // Optional: Fallback to anonymous if you want guest mode
-    // signInAnonymously(auth); 
   };
 
   // --- DATA ---
@@ -398,6 +400,21 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {settings && weeklyData.length > 0 && (
+               <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-sm gap-2 border border-slate-700">
+                  <div className="flex items-center gap-2">
+                     <Target size={16} className="text-blue-400 shrink-0" />
+                     <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
+                  </div>
+                  <span className="text-slate-400 whitespace-nowrap">Target: {weeklyData[weeklyData.length-1].target.toFixed(1)} kg</span>
+               </div>
+            )}
+            {settings && weeklyData.length === 0 && (
+               <div className="bg-blue-900/20 text-blue-300 border border-blue-900/50 px-4 py-3 rounded-xl text-sm shadow-sm text-center">
+                 Start logging weights to initialize your trendline.
+               </div>
+            )}
 
             <section>
               <h2 className="text-sm font-semibold text-slate-300 mb-2 ml-1">Trend Adherence</h2>
