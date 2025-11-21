@@ -3,7 +3,11 @@ import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
   signInAnonymously, 
-  onAuthStateChanged
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged,
+  User
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -24,8 +28,12 @@ import {
   Trash2, 
   ChevronRight, 
   ChevronDown,
+  Activity,
   Calendar,
-  Clock
+  Target,
+  Clock,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -42,6 +50,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const googleProvider = new GoogleAuthProvider();
 
 // --- Types ---
 interface WeightEntry {
@@ -86,7 +95,7 @@ const formatDate = (dateString: string) => {
 // --- Main Component ---
 
 export default function App() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,42 +109,35 @@ export default function App() {
 
   // --- AUTH ---
   useEffect(() => {
-    let isMounted = true;
-    signInAnonymously(auth).catch(() => {
-        if (isMounted) setUserId("demo-user-fallback");
-    });
-
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        if (isMounted) {
-            setUserId(currentUser.uid);
-            setLoading(false);
-        }
-      } else {
-        if (isMounted && !userId) {
-            setUserId("demo-user-fallback");
-            setLoading(false);
-        }
-      }
+      setUser(currentUser);
+      setLoading(false);
     });
-    
-    setTimeout(() => {
-        if (isMounted && !userId) {
-            setUserId("demo-user-fallback");
-            setLoading(false);
-        }
-    }, 2000);
-
-    return () => { isMounted = false; unsubscribe(); };
+    return () => unsubscribe();
   }, []);
+
+  const handleGoogleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+      alert("Login failed. Check popup blocker or console.");
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    // Optional: Fallback to anonymous if you want guest mode
+    // signInAnonymously(auth); 
+  };
 
   // --- DATA ---
   useEffect(() => {
-    if (!userId) return;
+    if (!user) return;
 
     const qWeights = query(
       // @ts-ignore
-      collection(db, 'users', userId, 'weights'), 
+      collection(db, 'users', user.uid, 'weights'), 
       orderBy('date', 'desc')
     );
 
@@ -145,7 +147,7 @@ export default function App() {
     }, (err) => console.error("Weight fetch error:", err));
 
     // @ts-ignore
-    const docRef = doc(db, 'users', userId, 'settings', 'config');
+    const docRef = doc(db, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const s = snapshot.data() as SettingsData;
@@ -155,14 +157,13 @@ export default function App() {
         setSettings(null);
         setView('settings');
       }
-      setLoading(false);
     }, (err) => console.error("Settings fetch error:", err));
 
     return () => {
       unsubWeights();
       unsubSettings();
     };
-  }, [userId]);
+  }, [user]);
 
   const weeklyData = useMemo<WeeklySummary[]>(() => {
     if (weights.length === 0 || !settings) return [];
@@ -221,11 +222,11 @@ export default function App() {
 
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!weightInput || !userId) return;
+    if (!weightInput || !user) return;
     
     try {
       // @ts-ignore
-      await setDoc(doc(db, 'users', userId, 'weights', dateInput), {
+      await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
         weight: parseFloat(weightInput),
         date: dateInput,
         createdAt: serverTimestamp()
@@ -239,11 +240,11 @@ export default function App() {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) return;
+    if (!user) return;
 
     try {
       // @ts-ignore
-      await setDoc(doc(db, 'users', userId, 'settings', 'config'), {
+      await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
         weeklyRate: parseFloat(weeklyRate),
         updatedAt: serverTimestamp()
       });
@@ -255,10 +256,10 @@ export default function App() {
 
   const handleDeleteEntry = async (id: string) => {
     if (!confirm("Delete this entry?")) return;
-    if (!userId) return;
+    if (!user) return;
     try {
       // @ts-ignore
-      await deleteDoc(doc(db, 'users', userId, 'weights', id));
+      await deleteDoc(doc(db, 'users', user.uid, 'weights', id));
     } catch (err) {
       console.error("Delete error", err);
     }
@@ -338,6 +339,27 @@ export default function App() {
 
   if (loading) return <div className="h-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
+  // --- LOGIN SCREEN ---
+  if (!user) return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+        <div className="mb-8">
+            <Activity size={48} className="text-blue-500 mx-auto mb-4" />
+            <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
+            <p className="text-slate-400">Track your progress securely.</p>
+        </div>
+        <button 
+            onClick={handleGoogleLogin}
+            className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full max-w-xs justify-center"
+        >
+            <LogIn size={20} />
+            Sign in with Google
+        </button>
+        <p className="text-xs text-slate-600 mt-8">
+            Your data is stored securely in the cloud.
+        </p>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
       
@@ -346,9 +368,14 @@ export default function App() {
         <div className="flex items-center gap-2 text-blue-500">
           {/* Logo area */}
         </div>
-        <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
-          <Settings size={20} className="text-slate-400" />
-        </button>
+        <div className="flex gap-2">
+            <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
+                <Settings size={20} className="text-slate-400" />
+            </button>
+            <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-red-400">
+                <LogOut size={20} />
+            </button>
+        </div>
       </div>
 
       <div className="max-w-md mx-auto p-4 space-y-5">
@@ -500,7 +527,7 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full">
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full block">
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
                     <div className="relative">
