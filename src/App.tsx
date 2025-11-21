@@ -7,6 +7,9 @@ import {
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
+  setPersistence, // NEW IMPORT
+  browserSessionPersistence, // NEW IMPORT
+  browserLocalPersistence, // NEW IMPORT
   type User 
 } from 'firebase/auth';
 import { 
@@ -146,7 +149,10 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     try {
-      // Set flag before redirect
+      // Step 1: Set persistence to 'local' storage before redirect
+      await setPersistence(auth, browserLocalPersistence);
+      
+      // Step 2: Set flag and initiate redirect
       localStorage.setItem('isRedirecting', 'true');
       await signInWithRedirect(auth, googleProvider);
     } catch (error) {
