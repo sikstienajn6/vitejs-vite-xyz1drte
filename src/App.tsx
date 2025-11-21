@@ -503,7 +503,7 @@ export default function App() {
           </>
         )}
 
-        {view === 'settings' && (
+{view === 'settings' && (
            <div className="space-y-4 w-full">
             <div className="flex items-center gap-2 mb-4">
                 <button onClick={() => setView('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
@@ -512,7 +512,8 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full">
+             {/* Removed 'flex' restrictions and added block display */}
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full block">
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
                     <div className="relative">
@@ -534,7 +535,3 @@ export default function App() {
              </form>
            </div>
         )}
-      </div>
-    </div>
-  );
-}
