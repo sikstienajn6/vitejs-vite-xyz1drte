@@ -2,8 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged
+  signInWithRedirect, // Changed from signInWithPopup
+  getRedirectResult,  // Needed to read the result after redirect
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged,
+  type User 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -27,7 +31,9 @@ import {
   Activity,
   Calendar,
   Target,
-  Clock
+  Clock,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -44,6 +50,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+const googleProvider = new GoogleAuthProvider();
 
 // --- Types ---
 interface WeightEntry {
@@ -71,10 +78,15 @@ interface WeeklySummary {
 
 // --- Helper Functions ---
 const getWeekKey = (date: string) => {
+  // Logic for Monday start (ISO 8601 week date)
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
+  // Set to nearest Thursday: current date + 4 - current day number
+  // Make Sunday's day number 7
   d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  // Get first day of year
   const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  // Calculate full weeks to nearest Thursday
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
@@ -88,7 +100,7 @@ const formatDate = (dateString: string) => {
 // --- Main Component ---
 
 export default function App() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -96,49 +108,55 @@ export default function App() {
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState('dashboard'); 
-  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
 
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
 
-  // --- AUTH ---
+  // --- AUTH AND REDIRECT HANDLING ---
   useEffect(() => {
-    let isMounted = true;
-    signInAnonymously(auth).catch(() => {
-        if (isMounted) setUserId("demo-user-fallback");
-    });
+    // 1. Handle incoming redirect result first
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result && result.user) {
+          console.log("Redirect success, user:", result.user.uid);
+        }
+      })
+      .catch((error) => {
+        console.error("Redirect failed:", error);
+      })
+      .finally(() => {
+        // 2. Set up standard auth listener
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
+            setLoading(false);
+        });
+        return () => unsubscribe();
+      });
 
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        if (isMounted) {
-            setUserId(currentUser.uid);
-            setLoading(false);
-        }
-      } else {
-        if (isMounted && !userId) {
-            setUserId("demo-user-fallback");
-            setLoading(false);
-        }
-      }
-    });
-    
-    setTimeout(() => {
-        if (isMounted && !userId) {
-            setUserId("demo-user-fallback");
-            setLoading(false);
-        }
-    }, 2000);
-
-    return () => { isMounted = false; unsubscribe(); };
   }, []);
+
+  const handleGoogleLogin = async () => {
+    try {
+      // Initiates the redirect
+      await signInWithRedirect(auth, googleProvider);
+      // NOTE: Code stops execution here as browser navigates away
+    } catch (error) {
+      console.error("Login initiation failed:", error);
+      alert("Login initiation failed. Check console.");
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
 
   // --- DATA ---
   useEffect(() => {
-    if (!userId) return;
+    if (!user) return;
 
     const qWeights = query(
       // @ts-ignore
-      collection(db, 'users', userId, 'weights'), 
+      collection(db, 'users', user.uid, 'weights'), 
       orderBy('date', 'desc')
     );
 
@@ -148,7 +166,7 @@ export default function App() {
     }, (err) => console.error("Weight fetch error:", err));
 
     // @ts-ignore
-    const docRef = doc(db, 'users', userId, 'settings', 'config');
+    const docRef = doc(db, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const s = snapshot.data() as SettingsData;
@@ -158,14 +176,13 @@ export default function App() {
         setSettings(null);
         setView('settings');
       }
-      setLoading(false);
     }, (err) => console.error("Settings fetch error:", err));
 
     return () => {
       unsubWeights();
       unsubSettings();
     };
-  }, [userId]);
+  }, [user]);
 
   const weeklyData = useMemo<WeeklySummary[]>(() => {
     if (weights.length === 0 || !settings) return [];
@@ -224,11 +241,11 @@ export default function App() {
 
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!weightInput || !userId) return;
+    if (!weightInput || !user) return;
     
     try {
       // @ts-ignore
-      await setDoc(doc(db, 'users', userId, 'weights', dateInput), {
+      await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
         weight: parseFloat(weightInput),
         date: dateInput,
         createdAt: serverTimestamp()
@@ -242,11 +259,11 @@ export default function App() {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) return;
+    if (!user) return;
 
     try {
       // @ts-ignore
-      await setDoc(doc(db, 'users', userId, 'settings', 'config'), {
+      await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
         weeklyRate: parseFloat(weeklyRate),
         updatedAt: serverTimestamp()
       });
@@ -258,10 +275,10 @@ export default function App() {
 
   const handleDeleteEntry = async (id: string) => {
     if (!confirm("Delete this entry?")) return;
-    if (!userId) return;
+    if (!user) return;
     try {
       // @ts-ignore
-      await deleteDoc(doc(db, 'users', userId, 'weights', id));
+      await deleteDoc(doc(db, 'users', user.uid, 'weights', id));
     } catch (err) {
       console.error("Delete error", err);
     }
@@ -341,16 +358,43 @@ export default function App() {
 
   if (loading) return <div className="h-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
+  // --- LOGIN SCREEN ---
+  if (!user) return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
+        <div className="mb-8">
+            <Activity size={48} className="text-blue-500 mx-auto mb-4" />
+            <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
+            <p className="text-slate-400">Track your progress securely.</p>
+        </div>
+        <button 
+            onClick={handleGoogleLogin}
+            className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full max-w-xs justify-center"
+        >
+            <LogIn size={20} />
+            Sign in with Google
+        </button>
+        <p className="text-xs text-slate-600 mt-8">
+            Your data is stored securely in the cloud.
+        </p>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-20">
       
+      {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
         <div className="flex items-center gap-2 text-blue-500">
           {/* Logo area */}
         </div>
-        <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
-          <Settings size={20} className="text-slate-400" />
-        </button>
+        <div className="flex gap-2">
+            <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
+                <Settings size={20} className="text-slate-400" />
+            </button>
+            <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-red-400">
+                <LogOut size={20} />
+            </button>
+        </div>
       </div>
 
       <div className="max-w-md mx-auto p-4 space-y-5">
@@ -373,6 +417,21 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {settings && weeklyData.length > 0 && (
+               <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-sm gap-2 border border-slate-700">
+                  <div className="flex items-center gap-2">
+                     <Target size={16} className="text-blue-400 shrink-0" />
+                     <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
+                  </div>
+                  <span className="text-slate-400 whitespace-nowrap">Target: {weeklyData[weeklyData.length-1].target.toFixed(1)} kg</span>
+               </div>
+            )}
+            {settings && weeklyData.length === 0 && (
+               <div className="bg-blue-900/20 text-blue-300 border border-blue-900/50 px-4 py-3 rounded-xl text-sm shadow-sm text-center">
+                 Start logging weights to initialize your trendline.
+               </div>
+            )}
 
             <section>
               <h2 className="text-sm font-semibold text-slate-300 mb-2 ml-1">Trend Adherence</h2>
@@ -502,13 +561,13 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full">
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full block">
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
                     <div className="relative">
                         <input 
                             type="number" step="0.01" required 
-                            value={weeklyRate} onChange={e => setWeeklyRate(e.target.value)}
+                            value={weeklyRate} onChange={(e) => setWeeklyRate(e.target.value)}
                             className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"
                             placeholder="e.g. 0.5 or -0.5"
                         />
