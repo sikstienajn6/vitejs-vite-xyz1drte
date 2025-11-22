@@ -8,7 +8,8 @@ import {
   setPersistence,
   browserLocalPersistence,
   signOut,
-  signInAnonymously
+  signInAnonymously,
+  type User
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -31,14 +32,17 @@ import {
   ChevronDown,
   Clock,
   LogOut,
-  User
+  LogIn,
+  Activity,
+  Target,
+  Calendar
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
-// NOTE: Vercel should use the Environment Variables for the API Key.
 const firebaseConfig = {
-  // Using Vercel ENV variable if available, otherwise using hardcoded value for dev environment
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBxmZxjDUpeOUPWFD_Bg-dOP4J4_F3R1rE", 
+  // Fixed: Removed 'import.meta' to prevent build errors. 
+  // Using the specific key you provided.
+  apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE", 
   authDomain: "weighttracker-b4b79.firebaseapp.com",
   projectId: "weighttracker-b4b79",
   storageBucket: "weighttracker-b4b79.firebasestorage.app",
@@ -109,25 +113,20 @@ export default function App() {
 
   // --- AUTH AND INITIAL LOAD ---
   useEffect(() => {
-    // 1. Check for old Anonymous ID and set persistence
     const storedAnonId = localStorage.getItem('anonId');
 
-    // 2. Auth state listener
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
-        // Logged in with Google (or existing session)
         setUserId(currentUser.uid);
         setIsAuthReady(true);
       } else if (storedAnonId) {
-        // Attempt to sign in anonymously if we previously had an anonymous user
         signInAnonymously(auth).then(anonUser => {
           setUserId(anonUser.user.uid);
           setIsAuthReady(true);
         }).catch(() => {
-          setIsAuthReady(true); // Failed, but auth process is done
+          setIsAuthReady(true); 
         });
       } else {
-        // Not logged in and no previous anon session. Show login screen.
         setIsAuthReady(true);
       }
       setLoading(false);
@@ -139,21 +138,18 @@ export default function App() {
   // --- GOOGLE SIGN IN HANDLERS ---
   const handleGoogleSignIn = async () => {
     try {
-      // Set persistence before opening the popup
       await setPersistence(auth, browserLocalPersistence);
       const result = await signInWithPopup(auth, provider);
       
-      // Get the current anonymous user ID if one exists before linking
       const anonUser = auth.currentUser;
       let currentAnonId = anonUser?.isAnonymous ? anonUser.uid : null;
       
       if (currentAnonId && currentAnonId !== result.user.uid) {
-        // Firebase handles automatic linking (merge) if the providers match (Google to Google), 
-        // but since we are replacing Anonymous with Google, the data migration is manual via the database queries.
+        // Linking logic handled by Firebase if providers match
       }
       
       setUserId(result.user.uid);
-      localStorage.setItem('anonId', result.user.uid); // Store the final ID
+      localStorage.setItem('anonId', result.user.uid); 
       setView('dashboard');
       
     } catch (error: any) {
@@ -176,7 +172,6 @@ export default function App() {
   useEffect(() => {
     if (!isAuthReady || !userId) return;
 
-    // Use a function to resolve the collection path
     const getCollectionPath = (uid: string) => collection(db, 'users', uid, 'weights');
     const qWeights = query(getCollectionPath(userId), orderBy('date', 'desc'));
 
@@ -202,7 +197,7 @@ export default function App() {
       unsubWeights();
       unsubSettings();
     };
-  }, [userId, isAuthReady]); // Re-run effect when userId changes
+  }, [userId, isAuthReady]); 
 
   // --- LOGIC ---
   const weeklyData = useMemo<WeeklySummary[]>(() => {
@@ -238,12 +233,10 @@ export default function App() {
       
       for (let i = 0; i < processed.length; i++) {
         if (i === 0) {
-            // Anchor the first week's target to the actual average
             processed[i].target = processed[i].actual;
             processed[i].delta = 0;
             processed[i].hasPrev = false;
         } else {
-            // Trendline starts from the previous week's ACTUAL weight + target rate
             const prevActual = processed[i-1].actual;
             processed[i].target = prevActual + rate;
             processed[i].delta = processed[i].actual - prevActual;
@@ -298,6 +291,7 @@ export default function App() {
 
   const handleDeleteEntry = async (id: string) => {
     if (!confirm("Delete this entry?")) return;
+    if (!userId) return;
     try {
       // @ts-ignore
       await deleteDoc(doc(db, 'users', userId, 'weights', id));
@@ -313,8 +307,21 @@ export default function App() {
   };
   
   // --- COMPONENTS ---
+  
+  const getDeltaColor = (delta: number) => {
+    const rate = settings ? parseFloat(settings.weeklyRate.toString()) : 0;
+    const isBulking = rate >= 0;
+    
+    if (delta === 0) return 'text-slate-500';
+    
+    if (isBulking) {
+        return delta > 0 ? 'text-emerald-400' : 'text-rose-400';
+    } else {
+        return delta < 0 ? 'text-emerald-400' : 'text-rose-400';
+    }
+  };
+
   const SimpleChart = ({ data }: { data: WeeklySummary[] }) => {
-    // ... [Chart component implementation]
     if (!data || data.length < 2) return (
       <div className="h-48 flex items-center justify-center text-slate-400 bg-slate-900 rounded-xl border border-dashed border-slate-700">
         <p className="text-sm">Log data for 2+ weeks to see trend</p>
@@ -364,250 +371,234 @@ export default function App() {
       </div>
     );
   };
-  
-  // --- RENDER ---
-  
-  const renderContent = () => {
-    if (loading) return <div className="h-screen flex items-center justify-center text-blue-400 animate-pulse bg-slate-950">Loading...</div>;
 
-    if (!userId && isAuthReady) {
-      return (
-        <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center p-4">
-          <div className="bg-slate-900 shadow-2xl p-8 rounded-2xl w-full max-w-sm border border-slate-800 flex flex-col items-center text-center">
-            <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
-            <p className="text-sm text-slate-400 mb-8">Track your progress securely.</p>
-            
-            <button
-              onClick={handleGoogleSignIn}
-              className="w-full flex items-center justify-center gap-3 bg-blue-600 text-white font-semibold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-md shadow-blue-900/50"
-            >
-              <LogOut size={20} className="transform rotate-180" /> Sign in with Google
-            </button>
+  if (loading) return <div className="h-screen flex items-center justify-center text-blue-400 animate-pulse bg-slate-950">Loading...</div>;
 
-            <p className="text-xs text-slate-500 mt-6">Your data is stored securely in the cloud.</p>
-          </div>
-        </div>
-      );
-    }
-    
-    return (
-      <div className="min-h-screen bg-slate-950 text-white font-sans pb-20">
+  // --- LOGIN SCREEN ---
+  if (!user) return (
+    <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center p-4">
+      <div className="bg-slate-900 shadow-2xl p-8 rounded-2xl w-full max-w-sm border border-slate-800 flex flex-col items-center text-center">
+        <Activity size={48} className="text-blue-500 mb-4" />
+        <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
+        <p className="text-sm text-slate-400 mb-8">Track your progress securely.</p>
         
-        {/* Header */}
-        <div className="bg-slate-900 px-4 py-4 shadow-xl sticky top-0 z-10 flex justify-end items-center border-b border-slate-800">
-          <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
-            <Settings size={20} className="text-slate-400" />
-          </button>
-        </div>
+        <button
+          onClick={handleGoogleSignIn}
+          className="w-full flex items-center justify-center gap-3 bg-blue-600 text-white font-semibold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-md shadow-blue-900/50"
+        >
+          <LogIn size={20} /> Sign in with Google
+        </button>
 
-        {/* Main Content */}
-        <div className="max-w-md mx-auto p-4 space-y-5">
-          
-          {view === 'dashboard' && (
-            <>
-              {/* Overview Cards */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-900 p-4 rounded-2xl shadow-lg border border-slate-800">
-                  <p className="text-slate-500 text-xs font-medium uppercase mb-1">Current Avg</p>
-                  <p className="text-2xl font-bold text-white truncate">
-                    {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
-                    <span className="text-sm font-normal text-slate-400 ml-1">kg</span>
-                  </p>
-                </div>
-                <div className="bg-slate-900 p-4 rounded-2xl shadow-lg border border-slate-800">
-                  <p className="text-slate-500 text-xs font-medium uppercase mb-1">Last Week</p>
-                  <div className={`flex items-center gap-1 text-lg font-bold truncate ${currentWeeklyDiff < 0 ? 'text-emerald-400' : currentWeeklyDiff > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                    {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                    {Math.abs(currentWeeklyDiff).toFixed(2)} kg
-                  </div>
+        <p className="text-xs text-slate-500 mt-6">Your data is stored securely in the cloud.</p>
+      </div>
+    </div>
+  );
+    
+  return (
+    <div className="min-h-screen bg-slate-950 text-white font-sans pb-20">
+      
+      {/* Header */}
+      <div className="bg-slate-900 px-4 py-4 shadow-xl sticky top-0 z-10 flex justify-end items-center border-b border-slate-800">
+        <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
+          <Settings size={20} className="text-slate-400" />
+        </button>
+      </div>
+
+      {/* Main Content */}
+      <div className="max-w-md mx-auto p-4 space-y-5">
+        
+        {view === 'dashboard' && (
+          <>
+            {/* Overview Cards */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-slate-900 p-4 rounded-2xl shadow-lg border border-slate-800">
+                <p className="text-slate-500 text-xs font-medium uppercase mb-1">Current Avg</p>
+                <p className="text-2xl font-bold text-white truncate">
+                  {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
+                  <span className="text-sm font-normal text-slate-400 ml-1">kg</span>
+                </p>
+              </div>
+              <div className="bg-slate-900 p-4 rounded-2xl shadow-lg border border-slate-800">
+                <p className="text-slate-500 text-xs font-medium uppercase mb-1">Last Week</p>
+                <div className={`flex items-center gap-1 text-lg font-bold truncate ${getDeltaColor(currentWeeklyDiff)}`}>
+                  {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                  {Math.abs(currentWeeklyDiff).toFixed(2)} kg
                 </div>
               </div>
+            </div>
 
-              {/* Goal Summary */}
-              {settings && (
+            {/* Goal Summary */}
+            {settings && (
                  <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-inner gap-2">
                     <div className="flex items-center gap-2 text-slate-300">
-                       <TrendingUp size={16} className="text-blue-400 shrink-0" />
+                       <Target size={16} className="text-blue-400 shrink-0" />
                        <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate.toFixed(2)} kg/wk</span></span>
                     </div>
                     <button onClick={handleSignOut} className="text-xs text-red-400 hover:text-red-300 transition-colors p-1 rounded-md flex items-center gap-1">
                       <LogOut size={14} /> Sign Out
                     </button>
                  </div>
-              )}
+            )}
 
-              {/* Chart */}
-              <section>
-                <h2 className="text-sm font-semibold text-white mb-2 ml-1">Trend Adherence</h2>
-                <SimpleChart data={weeklyData} />
-              </section>
+            {/* Chart */}
+            <section>
+              <h2 className="text-sm font-semibold text-white mb-2 ml-1">Trend Adherence</h2>
+              <SimpleChart data={weeklyData} />
+            </section>
 
-              {/* Quick Add */}
-              <div className="bg-blue-800 rounded-2xl p-4 text-white shadow-xl shadow-blue-900/50">
-                <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm">
-                  <Plus size={18} /> Log Weight
-                </h3>
-                <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
-                  <div className="flex gap-2">
-                      <input 
-                      type="number" 
-                      step="0.01" 
-                      placeholder="0.0"
-                      className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl"
-                      value={weightInput}
-                      onChange={(e) => setWeightInput(e.target.value)}
-                      required
-                      />
-                      <button 
-                      type="submit"
-                      className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg"
-                      >
-                      Add
-                      </button>
-                  </div>
-                  <div className="relative">
-                      <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none">
-                          <Clock size={16} />
-                      </div>
-                      <input 
-                          type="date" 
-                          className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer"
-                          value={dateInput}
-                          onChange={(e) => setDateInput(e.target.value)}
-                          aria-label="Select date"
-                      />
-                  </div>
-                </form>
-              </div>
+            {/* Quick Add */}
+            <div className="bg-blue-800 rounded-2xl p-4 text-white shadow-xl shadow-blue-900/50">
+              <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm">
+                <Plus size={18} /> Log Weight
+              </h3>
+              <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
+                <div className="flex gap-2">
+                    <input 
+                    type="number" 
+                    step="0.01" 
+                    placeholder="0.0"
+                    className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl"
+                    value={weightInput}
+                    onChange={(e) => setWeightInput(e.target.value)}
+                    required
+                    />
+                    <button 
+                    type="submit"
+                    className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg"
+                    >
+                    Add
+                    </button>
+                </div>
+                <div className="relative">
+                     <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none">
+                        <Clock size={16} />
+                     </div>
+                     <input 
+                        type="date" 
+                        className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer"
+                        value={dateInput}
+                        onChange={(e) => setDateInput(e.target.value)}
+                        aria-label="Select date"
+                    />
+                </div>
+              </form>
+            </div>
 
-              {/* Weekly Table */}
-              <section>
-                <h2 className="text-sm font-semibold text-white mb-3 px-1">Weekly Breakdown</h2>
-                
-                <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-800 overflow-hidden">
-                  {/* Table Header */}
-                  <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    <div>Week Start</div>
-                    <div className="text-right">Avg</div>
-                    <div className="text-right">Diff</div>
-                    <div className="w-5"></div>
-                  </div>
+            {/* Weekly Table */}
+            <section>
+              <h2 className="text-sm font-semibold text-white mb-3 px-1">Weekly Breakdown</h2>
+              
+              <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-800 overflow-hidden">
+                {/* Table Header */}
+                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  <div>Week Start</div>
+                  <div className="text-right">Avg</div>
+                  <div className="text-right">Diff</div>
+                  <div className="w-5"></div>
+                </div>
 
-                  {/* Table Body */}
-                  <div className="divide-y divide-slate-800">
-                    {weeklyData.slice().reverse().map((item) => {
-                      const isExpanded = expandedWeeks.includes(item.weekId);
-                      
-                      const isPositiveChange = item.delta > 0;
-                      const isNegativeChange = item.delta < 0;
-                      const rateIsPositive = settings?.weeklyRate > 0;
-
-                      const deltaColor = !item.hasPrev 
-                        ? 'text-slate-500' 
-                        : (rateIsPositive && isPositiveChange) || (!rateIsPositive && isNegativeChange)
-                          ? 'text-emerald-400' 
-                          : 'text-rose-400';
-
-                      return (
-                        <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
-                          {/* Main Row */}
-                          <div 
-                            className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer"
-                            onClick={() => toggleWeek(item.weekId)}
-                          >
-                            <div className="flex flex-col">
-                               <span className="text-sm font-semibold text-white">{item.weekLabel}</span>
-                               <span className="text-[10px] text-slate-400">{item.count} entries</span>
-                            </div>
-                            
-                            <div className="text-right font-bold text-white">
-                              {item.actual.toFixed(1)}
-                            </div>
-                            
-                            <div className={`text-right font-bold text-xs ${deltaColor}`}>
-                              {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(1)}` : item.delta.toFixed(1)) : '-'}
-                            </div>
-
-                            <div className="flex justify-end text-slate-500">
-                               <ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                            </div>
+                {/* Table Body */}
+                <div className="divide-y divide-slate-800">
+                  {weeklyData.slice().reverse().map((item) => {
+                    const isExpanded = expandedWeeks.includes(item.weekId);
+                    
+                    return (
+                      <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
+                        {/* Main Row */}
+                        <div 
+                          className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer"
+                          onClick={() => toggleWeek(item.weekId)}
+                        >
+                          <div className="flex flex-col">
+                             <span className="text-sm font-semibold text-white">{item.weekLabel}</span>
+                             <span className="text-[10px] text-slate-400">{item.count} entries</span>
+                          </div>
+                          
+                          <div className="text-right font-bold text-white">
+                            {item.actual.toFixed(1)}
+                          </div>
+                          
+                          <div className={`text-right font-bold text-xs ${getDeltaColor(item.delta)}`}>
+                            {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(1)}` : item.delta.toFixed(1)) : '-'}
                           </div>
 
-                          {/* Expanded Details */}
-                          {isExpanded && (
-                            <div className="bg-slate-800/50 px-4 py-2 border-t border-slate-700">
-                              <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Daily Entries</p>
-                              <div className="space-y-2">
-                                {item.entries.map((entry) => (
-                                  <div key={entry.id} className="flex justify-between items-center text-sm">
-                                    <div className="flex items-center gap-2 text-slate-400">
-                                      <Clock size={12} />
-                                      <span>{formatDate(entry.date)}</span>
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                       <span className="font-medium text-white">{entry.weight.toFixed(2)} kg</span>
-                                       <button 
-                                          onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }}
-                                          className="text-slate-500 hover:text-red-500"
-                                       >
-                                          <Trash2 size={12} />
-                                       </button>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
+                          <div className="flex justify-end text-slate-500">
+                             <ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                          </div>
                         </div>
-                      );
-                    })}
-                    
-                    {weeklyData.length === 0 && (
-                      <div className="p-6 text-center text-slate-500 text-sm">
-                        No data recorded yet.
+
+                        {/* Expanded Details */}
+                        {isExpanded && (
+                          <div className="bg-slate-800/50 px-4 py-2 border-t border-slate-700">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Daily Entries</p>
+                            <div className="space-y-2">
+                              {item.entries.map((entry) => (
+                                <div key={entry.id} className="flex justify-between items-center text-sm">
+                                  <div className="flex items-center gap-2 text-slate-400">
+                                    <Clock size={12} />
+                                    <span>{formatDate(entry.date)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                     <span className="font-medium text-white">{entry.weight.toFixed(2)} kg</span>
+                                     <button 
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }}
+                                        className="text-slate-500 hover:text-red-500"
+                                     >
+                                        <Trash2 size={12} />
+                                     </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
+                  
+                  {weeklyData.length === 0 && (
+                    <div className="p-6 text-center text-slate-500 text-sm">
+                      No data recorded yet.
+                    </div>
+                  )}
                 </div>
-              </section>
-            </>
-          )}
+              </div>
+            </section>
+          </>
+        )}
 
-          {view === 'settings' && (
-             <div className="space-y-4 w-full">
-              <div className="flex items-center gap-2 mb-4">
-                  <button onClick={() => setView('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
-                      <ChevronRight className="rotate-180 text-slate-400" size={20}/>
-                  </button>
-                  <h2 className="font-bold text-lg text-white">Plan Settings</h2>
-               </div>
-
-               <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-lg border border-slate-800 space-y-5 w-full block">
-                  <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
-                      <div className="relative">
-                          <input 
-                              type="number" step="0.01" required 
-                              value={weeklyRate} onChange={e => setWeeklyRate(e.target.value)}
-                              className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"
-                              placeholder="e.g. 0.5 or -0.5"
-                          />
-                      </div>
-                      <p className="text-xs text-slate-500 mt-2">Use positive (0.5) for bulk, negative (-0.5) for cut.</p>
-                  </div>
-
-                  <div className="pt-4">
-                      <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
-                          Save Plan
-                      </button>
-                  </div>
-               </form>
+        {view === 'settings' && (
+           <div className="space-y-4 w-full">
+            <div className="flex items-center gap-2 mb-4">
+                <button onClick={() => setView('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+                    <ChevronRight className="rotate-180 text-slate-400" size={20} />
+                </button>
+                <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
-          )}
-        </div>
-      </div>
-    );
-  };
 
-  return renderContent();
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-lg border border-slate-800 space-y-5 w-full block">
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
+                    <div className="relative">
+                        <input 
+                            type="number" step="0.01" required 
+                            value={weeklyRate} onChange={e => setWeeklyRate(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"
+                            placeholder="e.g. 0.5 or -0.5"
+                        />
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">Use positive (0.5) for bulk, negative (-0.5) for cut.</p>
+                </div>
+
+                <div className="pt-4">
+                    <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
+                        Save Plan
+                    </button>
+                </div>
+             </form>
+           </div>
+        )}
+      </div>
+    </div>
+  );
 }
