@@ -38,7 +38,7 @@ import {
 // NOTE: Vercel should use the Environment Variables for the API Key.
 const firebaseConfig = {
   // Using Vercel ENV variable if available, otherwise using hardcoded value for dev environment
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE", 
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBxmZxjDUpeOUPWFD_Bg-dOP4J4_F3R1rE", 
   authDomain: "weighttracker-b4b79.firebaseapp.com",
   projectId: "weighttracker-b4b79",
   storageBucket: "weighttracker-b4b79.firebasestorage.app",
