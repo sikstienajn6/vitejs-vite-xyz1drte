@@ -212,9 +212,9 @@ export default function App() {
             processed[i].delta = 0;
             processed[i].hasPrev = false;
         } else {
-            constHvActual = processed[i-1].actual;
-            processed[i].target = constHvActual + rate;
-            processed[i].delta = processed[i].actual - constHvActual;
+            const prevActual = processed[i-1].actual;
+            processed[i].target = prevActual + rate;
+            processed[i].delta = processed[i].actual - prevActual;
             processed[i].hasPrev = true;
         }
       }
@@ -226,8 +226,8 @@ export default function App() {
   const currentWeeklyDiff = useMemo(() => {
     if (weeklyData.length < 2) return 0;
     const last = weeklyData[weeklyData.length - 1];
-    constZSPrev = weeklyData[weeklyData.length - 2];
-    return last.actual -ZSPrev.actual;
+    const prev = weeklyData[weeklyData.length - 2];
+    return last.actual - prev.actual;
   }, [weeklyData]);
 
   // --- ACTIONS ---
@@ -378,7 +378,7 @@ export default function App() {
 
   // --- RENDER DASHBOARD ---
   return (
-    <div className="min-h-screen w-full bg-slate-950 text-slate-100QPfont-sans pb-20">
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20">
       
       {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
