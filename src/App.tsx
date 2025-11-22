@@ -375,7 +375,7 @@ export default function App() {
   if (loading) return <div className="h-screen flex items-center justify-center text-blue-400 animate-pulse bg-slate-950">Loading...</div>;
 
   // --- LOGIN SCREEN ---
-  if (!user) return (
+  if (!userId) return (
     <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center p-4">
       <div className="bg-slate-900 shadow-2xl p-8 rounded-2xl w-full max-w-sm border border-slate-800 flex flex-col items-center text-center">
         <Activity size={48} className="text-blue-500 mb-4" />
