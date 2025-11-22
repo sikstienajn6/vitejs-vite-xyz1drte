@@ -427,9 +427,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Goal Summary */}
-            {settings && (
-                 <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-inner gap-2">
+            {settings && weeklyData.length > 0 && (
+               <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-inner gap-2">
                     <div className="flex items-center gap-2 text-slate-300">
                        <Target size={16} className="text-blue-400 shrink-0" />
                        <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate.toFixed(2)} kg/wk</span></span>
