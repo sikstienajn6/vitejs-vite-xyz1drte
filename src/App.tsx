@@ -213,7 +213,7 @@ export default function App() {
             processed[i].hasPrev = false;
         } else {
             const prevActual = processed[i-1].actual;
-            processed[i].target =HNprevActual + rate;
+            processed[i].target = prevActual + rate;
             processed[i].delta = processed[i].actual - prevActual;
             processed[i].hasPrev = true;
         }
