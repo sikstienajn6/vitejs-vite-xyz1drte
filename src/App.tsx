@@ -2,14 +2,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  onAuthStateChanged,
+  signInWithRedirect, 
+  getRedirectResult,
   GoogleAuthProvider,
-  signInWithPopup,
-  setPersistence,
-  browserLocalPersistence,
   signOut,
-  signInAnonymously,
-  type User
+  onAuthStateChanged,
+  setPersistence, // NEW IMPORT
+  browserLocalPersistence, // NEW IMPORT
+  type User 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -30,31 +30,31 @@ import {
   Trash2, 
   ChevronRight, 
   ChevronDown,
+  Activity,
+  Calendar,
+  Target,
   Clock,
   LogOut,
-  LogIn,
-  Activity,
-  Target,
-  Calendar
+  LogIn
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
-  // Fixed: Removed 'import.meta' to prevent build errors. 
-  // Using the specific key you provided.
-  apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE", 
+  apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE",
   authDomain: "weighttracker-b4b79.firebaseapp.com",
   projectId: "weighttracker-b4b79",
   storageBucket: "weighttracker-b4b79.firebasestorage.app",
   messagingSenderId: "895893600072",
   appId: "1:895893600072:web:e329aba69602d46fa8e57d",
-  measurementId: "G-N2CH917QQB"
 };
+
+window.firebaseConfig = firebaseConfig;
+
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const provider = new GoogleAuthProvider();
+const googleProvider = new GoogleAuthProvider();
 
 // --- Types ---
 interface WeightEntry {
@@ -82,10 +82,15 @@ interface WeeklySummary {
 
 // --- Helper Functions ---
 const getWeekKey = (date: string) => {
+  // Logic for Monday start (ISO 8601 week date)
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
+  // Set to nearest Thursday: current date + 4 - current day number
+  // Make Sunday's day number 7
   d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  // Get first day of year
   const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  // Calculate full weeks to nearest Thursday
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
@@ -99,81 +104,78 @@ const formatDate = (dateString: string) => {
 // --- Main Component ---
 
 export default function App() {
-  const [userId, setUserId] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isAuthReady, setIsAuthReady] = useState(false);
   
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState('dashboard'); 
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
+
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
+  const [isRedirecting, setIsRedirecting] = useState(false); 
 
-  // --- AUTH AND INITIAL LOAD ---
+  // --- AUTH AND REDIRECT HANDLING ---
   useEffect(() => {
-    const storedAnonId = localStorage.getItem('anonId');
+    // Check local storage for redirect flag
+    const redirecting = localStorage.getItem('isRedirecting') === 'true';
+    if (redirecting) setIsRedirecting(true);
 
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        setUserId(currentUser.uid);
-        setIsAuthReady(true);
-      } else if (storedAnonId) {
-        signInAnonymously(auth).then(anonUser => {
-          setUserId(anonUser.user.uid);
-          setIsAuthReady(true);
-        }).catch(() => {
-          setIsAuthReady(true); 
+    // 1. Handle incoming redirect result first
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result && result.user) {
+          console.log("Redirect success, user:", result.user.uid);
+        }
+      })
+      .catch((error) => {
+        console.error("Redirect failed:", error);
+      })
+      .finally(() => {
+        // Clear flag regardless of success/failure
+        localStorage.removeItem('isRedirecting');
+        setIsRedirecting(false);
+
+        // 2. Set up standard auth listener
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+            setUser(currentUser);
+            setLoading(false);
         });
-      } else {
-        setIsAuthReady(true);
-      }
-      setLoading(false);
-    });
+        return () => unsubscribe();
+      });
 
-    return () => unsubscribe();
   }, []);
-  
-  // --- GOOGLE SIGN IN HANDLERS ---
-  const handleGoogleSignIn = async () => {
+
+  const handleGoogleLogin = async () => {
     try {
+      // Step 1: Set persistence to 'local' storage before redirect
       await setPersistence(auth, browserLocalPersistence);
-      const result = await signInWithPopup(auth, provider);
       
-      const anonUser = auth.currentUser;
-      let currentAnonId = anonUser?.isAnonymous ? anonUser.uid : null;
-      
-      if (currentAnonId && currentAnonId !== result.user.uid) {
-        // Linking logic handled by Firebase if providers match
-      }
-      
-      setUserId(result.user.uid);
-      localStorage.setItem('anonId', result.user.uid); 
-      setView('dashboard');
-      
-    } catch (error: any) {
-      console.error("Login failed:", error);
-      alert("Login failed. Check console for details.");
+      // Step 2: Set flag and initiate redirect
+      localStorage.setItem('isRedirecting', 'true');
+      await signInWithRedirect(auth, googleProvider);
+    } catch (error) {
+      localStorage.removeItem('isRedirecting');
+      console.error("Login initiation failed:", error);
+      alert("Login initiation failed. Check console.");
     }
   };
 
-  const handleSignOut = async () => {
+  const handleLogout = async () => {
     await signOut(auth);
-    setUserId(null);
-    setWeights([]);
-    setSettings(null);
-    localStorage.removeItem('anonId');
-    setView('login');
   };
 
-
-  // --- DATA FETCHING ---
+  // --- DATA ---
   useEffect(() => {
-    if (!isAuthReady || !userId) return;
+    if (!user) return;
 
-    const getCollectionPath = (uid: string) => collection(db, 'users', uid, 'weights');
-    const qWeights = query(getCollectionPath(userId), orderBy('date', 'desc'));
+    const qWeights = query(
+      // @ts-ignore
+      collection(db, 'users', user.uid, 'weights'), 
+      orderBy('date', 'desc')
+    );
 
     const unsubWeights = onSnapshot(qWeights, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as WeightEntry[];
@@ -181,7 +183,7 @@ export default function App() {
     }, (err) => console.error("Weight fetch error:", err));
 
     // @ts-ignore
-    const docRef = doc(db, 'users', userId, 'settings', 'config');
+    const docRef = doc(db, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const s = snapshot.data() as SettingsData;
@@ -197,9 +199,8 @@ export default function App() {
       unsubWeights();
       unsubSettings();
     };
-  }, [userId, isAuthReady]); 
+  }, [user]);
 
-  // --- LOGIC ---
   const weeklyData = useMemo<WeeklySummary[]>(() => {
     if (weights.length === 0 || !settings) return [];
 
@@ -255,14 +256,13 @@ export default function App() {
     return last.actual - prev.actual;
   }, [weeklyData]);
 
-  // --- HANDLERS ---
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!weightInput || !userId) return;
+    if (!weightInput || !user) return;
     
     try {
       // @ts-ignore
-      await setDoc(doc(db, 'users', userId, 'weights', dateInput), {
+      await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
         weight: parseFloat(weightInput),
         date: dateInput,
         createdAt: serverTimestamp()
@@ -270,16 +270,17 @@ export default function App() {
       setWeightInput('');
     } catch (err) {
       console.error("Error adding weight:", err);
+      alert("Error saving. Check console.");
     }
   };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) return;
+    if (!user) return;
 
     try {
       // @ts-ignore
-      await setDoc(doc(db, 'users', userId, 'settings', 'config'), {
+      await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
         weeklyRate: parseFloat(weeklyRate),
         updatedAt: serverTimestamp()
       });
@@ -291,10 +292,10 @@ export default function App() {
 
   const handleDeleteEntry = async (id: string) => {
     if (!confirm("Delete this entry?")) return;
-    if (!userId) return;
+    if (!user) return;
     try {
       // @ts-ignore
-      await deleteDoc(doc(db, 'users', userId, 'weights', id));
+      await deleteDoc(doc(db, 'users', user.uid, 'weights', id));
     } catch (err) {
       console.error("Delete error", err);
     }
@@ -302,14 +303,14 @@ export default function App() {
 
   const toggleWeek = (weekId: string) => {
     setExpandedWeeks(prev => 
-        prev.includes(weekId) ? prev.filter(id => id !== weekId) : [...prev, weekId]
+      prev.includes(weekId) 
+        ? prev.filter(id => id !== weekId) 
+        : [...prev, weekId]
     );
   };
-  
-  // --- COMPONENTS ---
-  
+
   const getDeltaColor = (delta: number) => {
-    const rate = settings ? parseFloat(settings.weeklyRate.toString()) : 0;
+    const rate = parseFloat(settings?.weeklyRate.toString() || '0');
     const isBulking = rate >= 0;
     
     if (delta === 0) return 'text-slate-500';
@@ -321,9 +322,9 @@ export default function App() {
     }
   };
 
-  const SimpleChart = ({ data }: { data: WeeklySummary[] }) => {
+  const SimpleChart = ({ data }: { data: any[] }) => {
     if (!data || data.length < 2) return (
-      <div className="h-48 flex items-center justify-center text-slate-400 bg-slate-900 rounded-xl border border-dashed border-slate-700">
+      <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
         <p className="text-sm">Log data for 2+ weeks to see trend</p>
       </div>
     );
@@ -345,20 +346,20 @@ export default function App() {
     const targetPath = data.map((d, i) => `${getX(i)},${getY(d.target)}`).join(' ');
 
     return (
-      <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-700 shadow-xl">
+      <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-          <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#475569" strokeWidth="1" />
-          <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#475569" strokeWidth="1" />
+          <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
+          <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
           {minVal < 0 && maxVal > 0 && (
-             <line x1={padding} y1={getY(0)} x2={width-padding} y2={getY(0)} stroke="#64748b" strokeWidth="1" strokeDasharray="2,2" />
+             <line x1={padding} y1={getY(0)} x2={width-padding} y2={getY(0)} stroke="#475569" strokeWidth="1" strokeDasharray="2,2" />
           )}
 
-          <polyline points={targetPath} fill="none" stroke="#64748b" strokeWidth="2" strokeDasharray="5,5" />
+          <polyline points={targetPath} fill="none" stroke="#475569" strokeWidth="2" strokeDasharray="5,5" />
           <polyline points={actualPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
 
           {data.map((d, i) => (
-            <circle key={i} cx={getX(i)} cy={getY(d.actual)} r="4" fill="#020617" stroke="#3b82f6" strokeWidth="2" />
+            <circle key={i} cx={getX(i)} cy={getY(d.actual)} r="4" fill="#0f172a" stroke="#3b82f6" strokeWidth="2" />
           ))}
 
           <text x={padding} y={height - 5} fontSize="14" fill="#64748b" textAnchor="start">
@@ -372,54 +373,65 @@ export default function App() {
     );
   };
 
-  if (loading) return <div className="h-screen flex items-center justify-center text-blue-400 animate-pulse bg-slate-950">Loading...</div>;
+  if (loading || isRedirecting) return <div className="h-screen w-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
-  // --- LOGIN SCREEN ---
-  if (!userId) return (
-    <div className="min-h-screen w-full bg-slate-950 flex items-center justify-center p-4">
-      <div className="bg-slate-900 shadow-2xl p-8 rounded-2xl w-full max-w-sm border border-slate-800 flex flex-col items-center text-center">
-        <Activity size={48} className="text-blue-500 mb-4" />
-        <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
-        <p className="text-sm text-slate-400 mb-8">Track your progress securely.</p>
+  // --- LOGIN SCREEN (Fixed to full screen width) ---
+  if (!user) return (
+    <div className="min-h-screen w-screen bg-slate-950 grid place-items-center p-6">
+        <div className="max-w-xs text-center">
+            <Activity size={48} className="text-blue-500 mx-auto mb-4" />
+            <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
+            <p className="text-slate-400">Track your progress securely.</p>
         
-        <button
-          onClick={handleGoogleSignIn}
-          className="w-full flex items-center justify-center gap-3 bg-blue-600 text-white font-semibold py-3 rounded-xl hover:bg-blue-700 transition-colors shadow-md shadow-blue-900/50"
-        >
-          <LogIn size={20} /> Sign in with Google
-        </button>
-
-        <p className="text-xs text-slate-500 mt-6">Your data is stored securely in the cloud.</p>
-      </div>
+            <div className="mt-8">
+                <button 
+                    onClick={handleGoogleLogin}
+                    className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full justify-center"
+                >
+                    <LogIn size={20} />
+                    Sign in with Google
+                </button>
+            </div>
+            <p className="text-xs text-slate-600 mt-8">
+                Your data is stored securely in the cloud.
+            </p>
+        </div>
     </div>
   );
-    
+
   return (
-    <div className="min-h-screen bg-slate-950 text-white font-sans pb-20">
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20">
       
-      {/* Header */}
-      <div className="bg-slate-900 px-4 py-4 shadow-xl sticky top-0 z-10 flex justify-end items-center border-b border-slate-800">
-        <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
-          <Settings size={20} className="text-slate-400" />
-        </button>
+      {/* Dark Header */}
+      <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
+        <div className="flex items-center gap-2 text-blue-500">
+          {/* Logo area */}
+        </div>
+        <div className="flex gap-2">
+            <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
+                <Settings size={20} className="text-slate-400" />
+            </button>
+            <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-red-400">
+                <LogOut size={20} />
+            </button>
+        </div>
       </div>
 
-      {/* Main Content */}
+      {/* MAIN CONTENT AREA */}
       <div className="max-w-md mx-auto p-4 space-y-5">
         
         {view === 'dashboard' && (
           <>
-            {/* Overview Cards */}
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-slate-900 p-4 rounded-2xl shadow-lg border border-slate-800">
-                <p className="text-slate-500 text-xs font-medium uppercase mb-1">Current Avg</p>
+              <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Avg</p>
                 <p className="text-2xl font-bold text-white truncate">
                   {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
-                  <span className="text-sm font-normal text-slate-400 ml-1">kg</span>
+                  <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
                 </p>
               </div>
-              <div className="bg-slate-900 p-4 rounded-2xl shadow-lg border border-slate-800">
-                <p className="text-slate-500 text-xs font-medium uppercase mb-1">Last Week</p>
+              <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week</p>
                 <div className={`flex items-center gap-1 text-lg font-bold truncate ${getDeltaColor(currentWeeklyDiff)}`}>
                   {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
                   {Math.abs(currentWeeklyDiff).toFixed(2)} kg
@@ -428,25 +440,26 @@ export default function App() {
             </div>
 
             {settings && weeklyData.length > 0 && (
-               <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-inner gap-2">
-                    <div className="flex items-center gap-2 text-slate-300">
-                       <Target size={16} className="text-blue-400 shrink-0" />
-                       <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate.toFixed(2)} kg/wk</span></span>
-                    </div>
-                    <button onClick={handleSignOut} className="text-xs text-red-400 hover:text-red-300 transition-colors p-1 rounded-md flex items-center gap-1">
-                      <LogOut size={14} /> Sign Out
-                    </button>
-                 </div>
+               <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-sm gap-2 border border-slate-700">
+                  <div className="flex items-center gap-2">
+                     <Target size={16} className="text-blue-400 shrink-0" />
+                     <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
+                  </div>
+                  <span className="text-slate-400 whitespace-nowrap">Target: {weeklyData[weeklyData.length-1].target.toFixed(1)} kg</span>
+               </div>
+            )}
+            {settings && weeklyData.length === 0 && (
+               <div className="bg-blue-900/20 text-blue-300 border border-blue-900/50 px-4 py-3 rounded-xl text-sm shadow-sm text-center">
+                 Start logging weights to initialize your trendline.
+               </div>
             )}
 
-            {/* Chart */}
             <section>
-              <h2 className="text-sm font-semibold text-white mb-2 ml-1">Trend Adherence</h2>
+              <h2 className="text-sm font-semibold text-slate-300 mb-2 ml-1">Trend Adherence</h2>
               <SimpleChart data={weeklyData} />
             </section>
 
-            {/* Quick Add */}
-            <div className="bg-blue-800 rounded-2xl p-4 text-white shadow-xl shadow-blue-900/50">
+            <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
               <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm">
                 <Plus size={18} /> Log Weight
               </h3>
@@ -483,41 +496,36 @@ export default function App() {
               </form>
             </div>
 
-            {/* Weekly Table */}
             <section>
-              <h2 className="text-sm font-semibold text-white mb-3 px-1">Weekly Breakdown</h2>
+              <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">Weekly Breakdown</h2>
               
-              <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-800 overflow-hidden">
-                {/* Table Header */}
-                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-800/50 border-b border-slate-700 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  <div>Week Start</div>
+              <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
+                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                  <div>Week</div>
                   <div className="text-right">Avg</div>
                   <div className="text-right">Diff</div>
                   <div className="w-5"></div>
                 </div>
 
-                {/* Table Body */}
                 <div className="divide-y divide-slate-800">
                   {weeklyData.slice().reverse().map((item) => {
                     const isExpanded = expandedWeeks.includes(item.weekId);
-                    
                     return (
                       <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
-                        {/* Main Row */}
                         <div 
                           className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer"
                           onClick={() => toggleWeek(item.weekId)}
                         >
                           <div className="flex flex-col">
-                             <span className="text-sm font-semibold text-white">{item.weekLabel}</span>
-                             <span className="text-[10px] text-slate-400">{item.count} entries</span>
+                             <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
+                             <span className="text-[10px] text-slate-500">{item.count} entries</span>
                           </div>
                           
-                          <div className="text-right font-bold text-white">
+                          <div className="text-right font-bold text-slate-200">
                             {item.actual.toFixed(1)}
                           </div>
                           
-                          <div className={`text-right font-bold text-xs ${getDeltaColor(item.delta)}`}>
+                          <div className={`text-right font-bold text-xs ${!item.hasPrev ? 'text-slate-600' : getDeltaColor(item.delta)}`}>
                             {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(1)}` : item.delta.toFixed(1)) : '-'}
                           </div>
 
@@ -526,22 +534,21 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Expanded Details */}
                         {isExpanded && (
-                          <div className="bg-slate-800/50 px-4 py-2 border-t border-slate-700">
+                          <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
                             <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Daily Entries</p>
                             <div className="space-y-2">
                               {item.entries.map((entry) => (
                                 <div key={entry.id} className="flex justify-between items-center text-sm">
-                                  <div className="flex items-center gap-2 text-slate-400">
-                                    <Clock size={12} />
+                                  <div className="flex items-center gap-2 text-slate-500">
+                                    <Calendar size={12} />
                                     <span>{formatDate(entry.date)}</span>
                                   </div>
                                   <div className="flex items-center gap-3">
-                                     <span className="font-medium text-white">{entry.weight.toFixed(2)} kg</span>
+                                     <span className="font-medium text-slate-300">{entry.weight} kg</span>
                                      <button 
                                         onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }}
-                                        className="text-slate-500 hover:text-red-500"
+                                        className="text-slate-600 hover:text-red-400"
                                      >
                                         <Trash2 size={12} />
                                      </button>
@@ -566,6 +573,7 @@ export default function App() {
           </>
         )}
 
+        {/* SETTINGS SCREEN (Fixed to full screen width) */}
         {view === 'settings' && (
            <div className="space-y-4 w-full">
             <div className="flex items-center gap-2 mb-4">
@@ -575,13 +583,13 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-lg border border-slate-800 space-y-5 w-full block">
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full block">
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
                     <div className="relative">
                         <input 
                             type="number" step="0.01" required 
-                            value={weeklyRate} onChange={e => setWeeklyRate(e.target.value)}
+                            value={weeklyRate} onChange={(e) => setWeeklyRate(e.target.value)}
                             className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"
                             placeholder="e.g. 0.5 or -0.5"
                         />
