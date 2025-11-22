@@ -7,8 +7,6 @@ import {
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
-  setPersistence, // NEW IMPORT
-  browserLocalPersistence, // NEW IMPORT
   type User 
 } from 'firebase/auth';
 import { 
@@ -48,9 +46,7 @@ const firebaseConfig = {
   appId: "1:895893600072:web:e329aba69602d46fa8e57d",
 };
 
-window.firebaseConfig = firebaseConfig;
-
-
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -82,15 +78,10 @@ interface WeeklySummary {
 
 // --- Helper Functions ---
 const getWeekKey = (date: string) => {
-  // Logic for Monday start (ISO 8601 week date)
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  // Set to nearest Thursday: current date + 4 - current day number
-  // Make Sunday's day number 7
   d.setDate(d.getDate() + 4 - (d.getDay() || 7));
-  // Get first day of year
   const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
-  // Calculate full weeks to nearest Thursday
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
@@ -113,53 +104,33 @@ export default function App() {
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState('dashboard'); 
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
-
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
-  const [isRedirecting, setIsRedirecting] = useState(false); 
 
-  // --- AUTH AND REDIRECT HANDLING ---
+  // --- AUTH HANDLING ---
   useEffect(() => {
-    // Check local storage for redirect flag
-    const redirecting = localStorage.getItem('isRedirecting') === 'true';
-    if (redirecting) setIsRedirecting(true);
+    // 1. Immediately listen for auth state changes (User logged in / logged out)
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+    });
 
-    // 1. Handle incoming redirect result first
+    // 2. Check if we just came back from a Google Redirect
     getRedirectResult(auth)
-      .then((result) => {
-        if (result && result.user) {
-          console.log("Redirect success, user:", result.user.uid);
-        }
-      })
       .catch((error) => {
-        console.error("Redirect failed:", error);
-      })
-      .finally(() => {
-        // Clear flag regardless of success/failure
-        localStorage.removeItem('isRedirecting');
-        setIsRedirecting(false);
-
-        // 2. Set up standard auth listener
-        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-            setUser(currentUser);
-            setLoading(false);
-        });
-        return () => unsubscribe();
+        console.error("Redirect login error:", error);
+        alert("Login failed: " + error.message);
       });
 
+    // Cleanup listener on unmount
+    return () => unsubscribe();
   }, []);
 
   const handleGoogleLogin = async () => {
     try {
-      // Step 1: Set persistence to 'local' storage before redirect
-      await setPersistence(auth, browserLocalPersistence);
-      
-      // Step 2: Set flag and initiate redirect
-      localStorage.setItem('isRedirecting', 'true');
       await signInWithRedirect(auth, googleProvider);
     } catch (error) {
-      localStorage.removeItem('isRedirecting');
       console.error("Login initiation failed:", error);
-      alert("Login initiation failed. Check console.");
+      alert("Login failed. Check console.");
     }
   };
 
@@ -167,21 +138,23 @@ export default function App() {
     await signOut(auth);
   };
 
-  // --- DATA ---
+  // --- DATA FETCHING ---
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setWeights([]);
+      setSettings(null);
+      return;
+    }
 
-    const qWeights = query(
-      // @ts-ignore
-      collection(db, 'users', user.uid, 'weights'), 
-      orderBy('date', 'desc')
-    );
-
+    // 1. Fetch Weights
+    // @ts-ignore
+    const qWeights = query(collection(db, 'users', user.uid, 'weights'), orderBy('date', 'desc'));
     const unsubWeights = onSnapshot(qWeights, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as WeightEntry[];
       setWeights(data);
     }, (err) => console.error("Weight fetch error:", err));
 
+    // 2. Fetch Settings
     // @ts-ignore
     const docRef = doc(db, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(docRef, (snapshot) => {
@@ -191,7 +164,7 @@ export default function App() {
         setWeeklyRate(s.weeklyRate ? s.weeklyRate.toString() : '0.0');
       } else {
         setSettings(null);
-        setView('settings');
+        setView('settings'); // Force settings view if no config exists
       }
     }, (err) => console.error("Settings fetch error:", err));
 
@@ -201,6 +174,7 @@ export default function App() {
     };
   }, [user]);
 
+  // --- CALCULATIONS ---
   const weeklyData = useMemo<WeeklySummary[]>(() => {
     if (weights.length === 0 || !settings) return [];
 
@@ -238,9 +212,9 @@ export default function App() {
             processed[i].delta = 0;
             processed[i].hasPrev = false;
         } else {
-            const prevActual = processed[i-1].actual;
-            processed[i].target = prevActual + rate;
-            processed[i].delta = processed[i].actual - prevActual;
+            constHvActual = processed[i-1].actual;
+            processed[i].target = constHvActual + rate;
+            processed[i].delta = processed[i].actual - constHvActual;
             processed[i].hasPrev = true;
         }
       }
@@ -252,10 +226,11 @@ export default function App() {
   const currentWeeklyDiff = useMemo(() => {
     if (weeklyData.length < 2) return 0;
     const last = weeklyData[weeklyData.length - 1];
-    const prev = weeklyData[weeklyData.length - 2];
-    return last.actual - prev.actual;
+    constZSPrev = weeklyData[weeklyData.length - 2];
+    return last.actual -ZSPrev.actual;
   }, [weeklyData]);
 
+  // --- ACTIONS ---
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!weightInput || !user) return;
@@ -322,6 +297,7 @@ export default function App() {
     }
   };
 
+  // --- CHART COMPONENT ---
   const SimpleChart = ({ data }: { data: any[] }) => {
     if (!data || data.length < 2) return (
       <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
@@ -373,9 +349,10 @@ export default function App() {
     );
   };
 
-  if (loading || isRedirecting) return <div className="h-screen w-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
+  // --- RENDER LOADING ---
+  if (loading) return <div className="h-screen w-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
-  // --- LOGIN SCREEN (Fixed to full screen width) ---
+  // --- RENDER LOGIN SCREEN ---
   if (!user) return (
     <div className="min-h-screen w-screen bg-slate-950 grid place-items-center p-6">
         <div className="max-w-xs text-center">
@@ -399,8 +376,9 @@ export default function App() {
     </div>
   );
 
+  // --- RENDER DASHBOARD ---
   return (
-    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20">
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100QPfont-sans pb-20">
       
       {/* Dark Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
