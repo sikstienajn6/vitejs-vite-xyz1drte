@@ -2,8 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInWithRedirect, 
-  getRedirectResult,
+  signInWithPopup, // Changed from signInWithRedirect
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
@@ -108,19 +107,6 @@ export default function App() {
 
   // --- AUTH HANDLING ---
   useEffect(() => {
-    // Handle Redirect Result first
-    getRedirectResult(auth)
-      .then((result) => {
-         if (result) {
-           console.log("Redirect login successful");
-           // The onAuthStateChanged listener will pick this up automatically
-         }
-      })
-      .catch((error) => {
-        console.error("Redirect login error:", error);
-        alert("Login failed: " + error.message);
-      });
-
     // Standard Auth Listener
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -132,10 +118,11 @@ export default function App() {
 
   const handleGoogleLogin = async () => {
     try {
-      await signInWithRedirect(auth, googleProvider);
+      // Switched to signInWithPopup to avoid redirect/cookie issues
+      await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
       console.error("Login initiation failed:", error);
-      alert("Login failed. Check console.");
+      alert("Login failed: " + error.message);
     }
   };
 
