@@ -108,27 +108,32 @@ export default function App() {
 
   // --- AUTH HANDLING ---
   useEffect(() => {
-    // 1. Immediately listen for auth state changes (User logged in / logged out)
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setLoading(false);
-    });
-
-    // 2. Check if we just came back from a Google Redirect
+    // Handle Redirect Result first
     getRedirectResult(auth)
+      .then((result) => {
+         if (result) {
+           console.log("Redirect login successful");
+           // The onAuthStateChanged listener will pick this up automatically
+         }
+      })
       .catch((error) => {
         console.error("Redirect login error:", error);
         alert("Login failed: " + error.message);
       });
 
-    // Cleanup listener on unmount
+    // Standard Auth Listener
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+    });
+
     return () => unsubscribe();
   }, []);
 
   const handleGoogleLogin = async () => {
     try {
       await signInWithRedirect(auth, googleProvider);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login initiation failed:", error);
       alert("Login failed. Check console.");
     }
