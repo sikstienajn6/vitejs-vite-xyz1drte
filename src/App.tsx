@@ -34,7 +34,8 @@ import {
   LogIn,
   AlertCircle,
   Maximize2,
-  X
+  X,
+  Info
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -71,18 +72,17 @@ interface SettingsData {
   updatedAt: any;
 }
 
-// FIX: Ensure this interface matches exactly what we return in useMemo
 interface WeeklySummary {
   weekId: string;
   weekLabel: string;
-  actual: number; // Trend Avg
-  rawAvg: number; // Scale Avg
+  actual: number; 
+  rawAvg: number; 
   count: number;
   entries: WeightEntry[];
   target: number;
   delta: number;
   hasPrev: boolean;
-  inTunnel: boolean; // Added this missing property
+  inTunnel: boolean; 
 }
 
 interface ChartPoint {
@@ -209,7 +209,6 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // Calculate Trend (EMA)
     const tMap = new Map<string, number>();
     let currentTrend = sortedWeights[0].weight; 
 
@@ -218,7 +217,6 @@ export default function App() {
         tMap.set(entry.date, currentTrend);
     });
 
-    // Group by Week
     const groups: Record<string, WeightEntry[]> = {};
     weights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
@@ -228,7 +226,6 @@ export default function App() {
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
-    // FIX: Explicitly type the array so we don't miss properties
     let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
@@ -249,11 +246,10 @@ export default function App() {
         target: 0, 
         delta: 0,
         hasPrev: false,
-        inTunnel: true // Default, calculated below
+        inTunnel: true 
       };
     });
 
-    // Set Targets & Tunnel Status
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
             processedWeeks[i].target = processedWeeks[i].actual;
@@ -270,11 +266,9 @@ export default function App() {
             processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
             processedWeeks[i].hasPrev = true;
         }
-        // FIX: Calculate inTunnel status based on TREND vs TARGET
         processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
     }
 
-    // Calculate Current Rate
     const lastEntry = sortedWeights[sortedWeights.length - 1];
     const lastTrend = tMap.get(lastEntry.date) || 0;
     
@@ -458,6 +452,21 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
+  // --- SHARED CONTROLS COMPONENT ---
+  const ChartControls = () => (
+    <div className="flex gap-2">
+        <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+            <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
+            <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
+            <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
+        </div>
+        <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+            <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Wk</button>
+            <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
+        </div>
+    </div>
+  );
+
   // --- CHART COMPONENT ---
   const ChartRenderer = ({ data, mode, expanded }: { data: ChartPoint[], mode: 'weekly' | 'daily', expanded: boolean }) => {
     if (!data || data.length < 2) return (
@@ -466,7 +475,7 @@ export default function App() {
       </div>
     );
 
-    const height = expanded ? 400 : 220;
+    const height = expanded ? 350 : 220;
     const width = 600; 
     const padding = expanded ? 50 : 30;
     const marginBottom = 30; 
@@ -523,7 +532,7 @@ export default function App() {
           {data.map((d, i) => {
              if (d.actual === null) return null;
              
-             // FIX: Use isTrendOff to color the ghost dots
+             // FIX: Color dot based on if TREND is out of tunnel, regardless of where dot is
              const isTrendOff = d.trend ? (d.trend > d.targetUpper || d.trend < d.targetLower) : false;
              
              return (
@@ -532,9 +541,8 @@ export default function App() {
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
                         r={expanded ? 3 : 2} 
-                        // Red if trend was bad at this time, Grey if good
                         fill={isTrendOff ? "#ef4444" : "#94a3b8"} 
-                        opacity={isTrendOff ? "0.8" : "0.5"}
+                        opacity={isTrendOff ? "0.9" : "0.5"}
                     />
                     {expanded && (
                         <text x={getX(i)} y={getY(d.actual) - 8} fontSize="10" fill="#cbd5e1" textAnchor="middle">
@@ -558,9 +566,8 @@ export default function App() {
     );
   };
 
-  // --- RENDER LOADING ---
   if (loading) return (
-    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50 overflow-hidden">
+    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50">
         <div className="text-blue-500 animate-pulse font-bold text-lg flex items-center gap-3">
             <Activity size={24} /> Loading RateTracker...
         </div>
@@ -586,19 +593,55 @@ export default function App() {
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
+      {/* EXPANDED CHART MODAL */}
       {isChartExpanded && (
-          <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col p-4 animate-in fade-in duration-200">
-              <div className="flex justify-between items-center mb-4 shrink-0">
-                  <h2 className="text-lg font-bold text-white">Detailed Trend Analysis</h2>
-                  <button onClick={() => setIsChartExpanded(false)} className="p-2 bg-slate-800 rounded-full text-white">
-                      <X size={24} />
+          <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col animate-in fade-in duration-200">
+              {/* Header */}
+              <div className="flex justify-between items-center p-4 border-b border-slate-800">
+                  <h2 className="text-lg font-bold text-white">Detailed Analysis</h2>
+                  <button onClick={() => setIsChartExpanded(false)} className="p-2 bg-slate-800 rounded-full text-white hover:bg-slate-700">
+                      <X size={20} />
                   </button>
               </div>
-              <div className="flex-1 min-h-0">
-                  <ChartRenderer data={finalChartData} mode={chartMode} expanded={true} />
+              
+              {/* Controls inside Modal */}
+              <div className="p-4 flex justify-center border-b border-slate-800 bg-slate-900/50">
+                  <ChartControls />
               </div>
-              <div className="mt-4 shrink-0 text-center text-sm text-slate-500">
-                  Blue Line: Trend Weight (Signal) • Dots: Scale Weight (Noise)
+
+              {/* Chart Area */}
+              <div className="flex-1 min-h-0 p-4 flex flex-col">
+                  <ChartRenderer data={finalChartData} mode={chartMode} expanded={true} />
+                  
+                  {/* Detailed Legend / Explanation */}
+                  <div className="mt-6 space-y-4 overflow-y-auto">
+                        <div className="grid grid-cols-3 gap-2 text-xs font-bold text-center">
+                            <div className="bg-slate-900 p-2 rounded border border-blue-500/30 text-blue-400">
+                                🔵 Trend Line
+                            </div>
+                            <div className="bg-slate-900 p-2 rounded border border-emerald-500/30 text-emerald-400">
+                                🟩 Goal Tunnel
+                            </div>
+                            <div className="bg-slate-900 p-2 rounded border border-slate-700 text-slate-400">
+                                ⚪ Scale Weight
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                            <div className="flex items-center gap-2 text-slate-200 font-bold mb-2 text-sm">
+                                <Info size={16} className="text-blue-500" />
+                                How the Model Works
+                            </div>
+                            <p className="text-xs text-slate-400 leading-relaxed">
+                                We use an <strong>Exponential Moving Average (EMA)</strong> to calculate your true weight. 
+                                Daily scale readings fluctuate due to water, salt, and carbs (glycogen).
+                                <br/><br/>
+                                <span className="text-white">● Grey Dot:</span> Your raw scale reading (includes noise).<br/>
+                                <span className="text-red-400">● Red Dot:</span> Indicates your <strong>Trend Line</strong> has drifted outside the safety tunnel at this point.<br/>
+                                <span className="text-blue-400">● Blue Line:</span> Your calculated "True Weight". Keep this line inside the green tunnel.
+                            </p>
+                        </div>
+                  </div>
               </div>
           </div>
       )}
@@ -652,18 +695,7 @@ export default function App() {
                             <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
                         
-                        <div className="flex gap-2">
-                             <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
-                                <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
-                                <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
-                                <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
-                            </div>
-                            
-                            <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
-                                <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Wk</button>
-                                <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
-                            </div>
-                        </div>
+                        <ChartControls />
                     </div>
                     <ChartRenderer data={finalChartData} mode={chartMode} expanded={false}/>
                 </section>
