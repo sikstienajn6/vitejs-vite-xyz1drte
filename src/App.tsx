@@ -25,6 +25,8 @@ import {
   Plus, 
   Settings, 
   Trash2, 
+  ChevronDown, 
+  ChevronRight,
   Activity,
   Calendar,
   Clock,
@@ -32,7 +34,7 @@ import {
   LogIn,
   AlertCircle,
   Info,
-  Target
+  Utensils
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -45,551 +47,987 @@ const firebaseConfig = {
   appId: "1:895893600072:web:e329aba69602d46fa8e57d",
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
-// --- TYPES ---
+// --- LOGIC CONSTANTS ---
+const TARGET_TOLERANCE = 0.2; 
+const EMA_ALPHA = 0.1; 
+const RATE_TOLERANCE_GREEN = 0.1;
+const RATE_TOLERANCE_ORANGE = 0.25;
+const BREAK_LINE_THRESHOLD_DAYS = 7; 
+
+// Height Constants
+const HEIGHT_COMPRESSED = 250;
+const HEIGHT_EXPANDED = 450;
+const SNAP_THRESHOLD = (HEIGHT_EXPANDED + HEIGHT_COMPRESSED) / 2;
+
+// --- Types ---
 interface WeightEntry {
   id: string;
   weight: number;
-  date: any; // Firestore Timestamp
-  timestamp?: any;
+  date: string;
+  createdAt: any;
 }
 
-interface UserSettings {
-  targetWeight?: number;
-  goalType?: 'lose' | 'gain' | 'maintain';
-  targetRate?: number; // kg per week
-  height?: number; // cm
+interface SettingsData {
+  weeklyRate: number;
+  updatedAt: any;
 }
 
-// --- UTILS ---
-const formatDate = (date: Date) => {
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+interface WeeklySummary {
+  weekId: string;
+  weekLabel: string;
+  actual: number; 
+  rawAvg: number; 
+  count: number;
+  entries: WeightEntry[];
+  target: number;
+  delta: number;
+  hasPrev: boolean;
+  inTunnel: boolean; 
+}
+
+interface ChartPoint {
+    label: string; 
+    actual: number | null; 
+    trend: number | null;  
+    target: number;
+    targetUpper: number;
+    targetLower: number;
+    weekLabel?: string;
+}
+
+// --- Helper Functions ---
+const getWeekKey = (date: string) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
-const calculateEMA = (data: { weight: number; date: Date }[], period: number = 7) => {
-  if (data.length === 0) return [];
-  const k = 2 / (period + 1);
-  let ema = data[0].weight;
-  return data.map(d => {
-    ema = d.weight * k + ema * (1 - k);
-    return { ...d, ema };
-  });
+const formatDate = (dateString: string) => {
+  if (!dateString) return '';
+  const d = new Date(dateString);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
-// --- COMPONENTS ---
-
-// 1. Graph Component
-const WeightGraph = ({ data, onShowInfo }: { data: any[], onShowInfo: () => void }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 0, height: 200 });
-
-  useLayoutEffect(() => {
-    if (containerRef.current) {
-      setDimensions({
-        width: containerRef.current.offsetWidth,
-        height: 250
-      });
+const getDaysArray = (start: Date, end: Date) => {
+    const arr = [];
+    for(let dt=new Date(start); dt<=end; dt.setDate(dt.getDate()+1)){
+        arr.push(new Date(dt).toISOString().split('T')[0]);
     }
-  }, [containerRef.current]);
-
-  if (!data || data.length < 2) {
-    return (
-      <div className="h-64 flex flex-col items-center justify-center text-zinc-500 bg-zinc-900/50 rounded-xl border-2 border-dashed border-zinc-800">
-        <Activity className="w-8 h-8 mb-2 opacity-50" />
-        <p>Add more entries to see your trend</p>
-      </div>
-    );
-  }
-
-  // Calculate scales
-  const weights = data.map(d => d.weight);
-  const minW = Math.min(...weights) - 1;
-  const maxW = Math.max(...weights) + 1;
-  const range = maxW - minW || 1;
-  
-  const padding = 20;
-  const graphWidth = dimensions.width - padding * 2;
-  const graphHeight = dimensions.height - padding * 2;
-
-  const points = data.map((d, i) => {
-    const x = padding + (i / (data.length - 1)) * graphWidth;
-    const y = padding + graphHeight - ((d.weight - minW) / range) * graphHeight;
-    const emaY = d.ema ? padding + graphHeight - ((d.ema - minW) / range) * graphHeight : y;
-    return { x, y, emaY, date: d.date, weight: d.weight, ema: d.ema };
-  });
-
-  // SVG Path for Line
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.y}`).join(' ');
-  // SVG Path for EMA (Trend)
-  const emaPath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x},${p.emaY}`).join(' ');
-  // Area under EMA
-  const areaPath = `${emaPath} L ${points[points.length-1].x},${dimensions.height} L ${points[0].x},${dimensions.height} Z`;
-
-  return (
-    <div className="bg-zinc-900 p-4 rounded-2xl shadow-sm border border-zinc-800 relative">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="text-sm font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
-          <Activity className="w-4 h-4" />
-          Weight Trend
-        </h3>
-        <button 
-          onClick={onShowInfo}
-          className="p-1.5 text-zinc-500 hover:text-indigo-400 hover:bg-zinc-800 rounded-full transition-colors"
-          aria-label="Trend Info"
-        >
-          <Info className="w-4 h-4" />
-        </button>
-      </div>
-
-      <div ref={containerRef} className="w-full relative select-none">
-        <svg width={dimensions.width} height={dimensions.height} className="overflow-visible">
-          <defs>
-            <linearGradient id="gradientArea" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#6366f1" stopOpacity="0.1" />
-              <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-
-          {/* Grid Lines */}
-          {[0, 0.25, 0.5, 0.75, 1].map(t => {
-            const y = padding + graphHeight - (t * graphHeight);
-            return (
-              <line 
-                key={t} 
-                x1={padding} 
-                y1={y} 
-                x2={dimensions.width - padding} 
-                y2={y} 
-                stroke="#27272a" // zinc-800
-                strokeWidth="1" 
-              />
-            );
-          })}
-
-          {/* Trend Area */}
-          <path d={areaPath} fill="url(#gradientArea)" stroke="none" />
-
-          {/* Raw Data Line */}
-          <path d={linePath} fill="none" stroke="#52525b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" />
-
-          {/* EMA Trend Line */}
-          <path d={emaPath} fill="none" stroke="#6366f1" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-
-          {/* Data Points */}
-          {points.map((p, i) => (
-            <g key={i} className="group">
-              <circle cx={p.x} cy={p.y} r="3" fill="#18181b" stroke="#71717a" strokeWidth="2" />
-              {/* Tooltip on hover */}
-              <foreignObject x={p.x - 20} y={p.y - 40} width="60" height="40" className="opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                <div className="bg-zinc-800 text-white text-xs rounded px-1 py-0.5 text-center shadow-lg transform -translate-x-2 border border-zinc-700">
-                  {p.weight}
-                </div>
-              </foreignObject>
-            </g>
-          ))}
-        </svg>
-
-        {/* X Axis Labels */}
-        <div className="flex justify-between mt-2 px-4 text-xs text-zinc-500">
-          <span>{formatDate(points[0]?.date)}</span>
-          <span>{formatDate(points[points.length-1]?.date)}</span>
-        </div>
-      </div>
-    </div>
-  );
+    return arr;
 };
 
-// 2. Advice Component (New)
-const SmartAdvice = ({ 
-  currentTrend, 
-  settings 
-}: { 
-  currentTrend: number, // weekly rate of change
-  settings: UserSettings 
-}) => {
-  const goalType = settings.goalType || 'lose';
-  const targetRate = settings.targetRate || 0.5; // kg/week absolute
-  
-  const targetSigned = goalType === 'lose' ? -targetRate : (goalType === 'gain' ? targetRate : 0);
-  const deviation = currentTrend - targetSigned;
-
-  // 1kg fat approx 7700 kcal. Daily adjustment = (deviation_kg_per_week * 7700) / 7
-  const dailyCalorieAdjustment = Math.round((deviation * 7700) / 7);
-  const isLossGoal = goalType === 'lose';
-
-  let advice = "";
-  let color = "bg-blue-500/10 text-blue-200 border-blue-500/20";
-  let Icon = Info;
-
-  // Thresholds for advice (0.1kg per week tolerance)
-  if (Math.abs(deviation) < 0.1) {
-    advice = "Perfect pace! You're right on track with your goal.";
-    color = "bg-emerald-500/10 text-emerald-300 border-emerald-500/20";
-    Icon = TrendingUp;
-  } else if (isLossGoal) {
-    if (deviation > 0) {
-      // Not losing enough
-      advice = `Losing slower than goal. Try reducing daily intake by ~${Math.abs(dailyCalorieAdjustment)} kcal to hit your target rate.`;
-      color = "bg-amber-500/10 text-amber-300 border-amber-500/20";
-      Icon = TrendingDown;
-    } else {
-      // Losing too fast
-      advice = `Losing faster than goal. Consider adding ~${Math.abs(dailyCalorieAdjustment)} kcal/day to preserve muscle mass.`;
-      color = "bg-indigo-500/10 text-indigo-300 border-indigo-500/20";
-      Icon = AlertCircle;
-    }
-  } else if (goalType === 'gain') {
-    if (deviation < 0) {
-      // Not gaining enough
-      advice = `Gaining slower than goal. Try adding ~${Math.abs(dailyCalorieAdjustment)} kcal/day.`;
-      color = "bg-amber-500/10 text-amber-300 border-amber-500/20";
-    } else {
-      // Gaining too fast
-      advice = `Gaining faster than goal. Reduce ~${Math.abs(dailyCalorieAdjustment)} kcal/day to minimize fat gain.`;
-    }
-  } else {
-     // Maintain
-     if (Math.abs(currentTrend) > 0.1) {
-        advice = `Drifting from maintenance. Adjust by ~${Math.abs(dailyCalorieAdjustment)} kcal/day to stabilize.`;
-        color = "bg-orange-500/10 text-orange-300 border-orange-500/20";
-     } else {
-       advice = "Maintenance is stable. Keep doing what you're doing!";
-       color = "bg-emerald-500/10 text-emerald-300 border-emerald-500/20";
-     }
-  }
-
-  return (
-    <div className={`p-4 rounded-xl border ${color} flex items-start gap-3 mt-4`}>
-      <Icon className="w-5 h-5 mt-0.5 flex-shrink-0" />
-      <div>
-        <h4 className="font-semibold text-sm mb-1">Adaptive Advice</h4>
-        <p className="text-sm opacity-90 leading-relaxed">{advice}</p>
-        <div className="mt-2 text-xs opacity-75 font-mono">
-          Target: {targetSigned > 0 ? '+' : ''}{targetSigned}kg/wk • Actual: {currentTrend > 0 ? '+' : ''}{currentTrend.toFixed(2)}kg/wk
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
-// --- MAIN APP ---
+// --- Main Component ---
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
-  const [viewMode, setViewMode] = useState<'daily' | 'weekly'>('daily');
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [newWeight, setNewWeight] = useState('');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settings, setSettings] = useState<UserSettings>({ goalType: 'lose', targetRate: 0.5 });
-  const [showGraphInfo, setShowGraphInfo] = useState(false);
+  const [settings, setSettings] = useState<SettingsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  
+  const [weightInput, setWeightInput] = useState('');
+  const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
+  const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
+  
+  // Chart State
+  const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
+  const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
+  
+  // Drag & Snap State
+  const [chartHeight, setChartHeight] = useState(HEIGHT_COMPRESSED);
+  const [isDragging, setIsDragging] = useState(false);
+  const [showExplanation, setShowExplanation] = useState(false);
+  
+  // Responsive Width State
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  
+  const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
+  const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
+  const [weeklyRate, setWeeklyRate] = useState('0.2'); 
+  const [monthlyRate, setMonthlyRate] = useState('0.87'); 
 
-  // Auth Effect
+  // --- AUTH ---
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
       setLoading(false);
     });
-    return unsubscribe;
+    return () => unsubscribe();
   }, []);
 
-  // Data Effect
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, `users/${user.uid}/weights`), orderBy('date', 'desc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-        date: d.data().date?.toDate() || new Date()
-      })) as WeightEntry[];
-      setWeights(data);
+  // --- MEASURE WIDTH ---
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const ro = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        setContainerWidth(entry.contentRect.width);
+      }
     });
-    
-    return unsubscribe;
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, [view, loading]); 
+
+  const handleGoogleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      console.error("Login initiation failed:", error);
+      alert("Login failed: " + error.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  // --- DATA FETCHING ---
+  useEffect(() => {
+    if (!user) {
+      setWeights([]);
+      setSettings(null);
+      return;
+    }
+
+    // @ts-ignore
+    const qWeights = query(collection(db, 'users', user.uid, 'weights'), orderBy('date', 'desc'));
+    const unsubWeights = onSnapshot(qWeights, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as WeightEntry[];
+      setWeights(data);
+    }, (err) => console.error("Weight fetch error:", err));
+
+    // @ts-ignore
+    const docRef = doc(db, 'users', user.uid, 'settings', 'config');
+    const unsubSettings = onSnapshot(docRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const s = snapshot.data() as SettingsData;
+        setSettings(s);
+        
+        const wRate = s.weeklyRate ? s.weeklyRate : 0;
+        const isNegative = wRate < 0;
+        const absRate = Math.abs(wRate);
+        
+        setGoalType(isNegative ? 'lose' : 'gain');
+        setWeeklyRate(absRate.toString());
+        setMonthlyRate((absRate * 4.345).toFixed(2));
+      } else {
+        setSettings(null);
+        setView('settings'); 
+      }
+    }, (err) => console.error("Settings fetch error:", err));
+
+    return () => {
+      unsubWeights();
+      unsubSettings();
+    };
   }, [user]);
 
-  // Derived State: Process Data
-  const processedData = useMemo(() => {
-    const reversed = [...weights].reverse();
-    const withEma = calculateEMA(reversed, 7);
-    
-    if (viewMode === 'weekly') {
-        return withEma;
+  // --- CALCULATIONS ---
+  const { weeklyData, trendMap, currentTrendRate } = useMemo(() => {
+    if (weights.length === 0 || !settings) {
+        return { weeklyData: [] as WeeklySummary[], trendMap: new Map(), currentTrendRate: 0 };
     }
-    return withEma;
-  }, [weights, viewMode]);
 
-  const currentWeight = weights[0]?.weight || 0;
-  const previousWeight = weights[1]?.weight || currentWeight;
-  const weightChange = currentWeight - previousWeight;
-  
-  // Calculate Trend Rate (Current EMA - EMA 7 days ago)
-  const currentTrendRate = useMemo(() => {
-    if (processedData.length < 8) return 0;
-    const current = processedData[processedData.length - 1].ema;
-    const weekAgo = processedData[processedData.length - 8].ema;
-    return current - weekAgo; // Change per week
-  }, [processedData]);
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+    
+    const tMap = new Map<string, number>();
+    let currentTrend = sortedWeights[0].weight; 
+
+    sortedWeights.forEach((entry) => {
+        currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
+        tMap.set(entry.date, currentTrend);
+    });
+
+    const groups: Record<string, WeightEntry[]> = {};
+    weights.forEach(entry => {
+      const weekKey = getWeekKey(entry.date);
+      if (!groups[weekKey]) groups[weekKey] = [];
+      groups[weekKey].push(entry);
+    });
+
+    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+    
+    let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
+      const entries = groups[weekKey];
+      const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
+      const rawAvg = valSum / entries.length;
+      
+      const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
+      const trendAvg = trendSum / entries.length;
+
+      const earliestDate = entries[entries.length - 1].date; 
+
+      return {
+        weekId: weekKey,
+        weekLabel: formatDate(earliestDate),
+        actual: trendAvg, 
+        rawAvg: rawAvg,
+        count: entries.length,
+        entries: entries,
+        target: 0, 
+        delta: 0,
+        hasPrev: false,
+        inTunnel: true 
+      };
+    });
+
+    for (let i = 0; i < processedWeeks.length; i++) {
+        if (i === 0) {
+            processedWeeks[i].target = processedWeeks[i].actual;
+        } else {
+            const prev = processedWeeks[i-1];
+            const dist = Math.abs(prev.actual - prev.target);
+            
+            if (dist <= TARGET_TOLERANCE) {
+                processedWeeks[i].target = prev.target + rate;
+            } else {
+                processedWeeks[i].target = prev.actual + rate;
+            }
+            
+            processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
+            processedWeeks[i].hasPrev = true;
+        }
+        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+    }
+
+    const lastEntry = sortedWeights[sortedWeights.length - 1];
+    const lastTrend = tMap.get(lastEntry.date) || 0;
+    
+    const sevenDaysAgo = new Date(lastEntry.date);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sdaString = sevenDaysAgo.toISOString().split('T')[0];
+    
+    let prevTrend = lastTrend; 
+    for(let i = sortedWeights.length - 2; i >= 0; i--) {
+        if (sortedWeights[i].date <= sdaString) {
+            prevTrend = tMap.get(sortedWeights[i].date) || 0;
+            break;
+        }
+    }
+    
+    const currentRate = lastTrend - prevTrend;
+
+    return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
+  }, [weights, settings]);
+
+
+  // --- CHART DATA PREP ---
+  const finalChartData = useMemo<ChartPoint[]>(() => {
+    if (weeklyData.length === 0 || !settings) return [];
+
+    const now = new Date();
+    let startDate = new Date('2000-01-01'); 
+    const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
+
+    if (filterRange === '1M') {
+        startDate = new Date();
+        startDate.setMonth(now.getMonth() - 1);
+    } else if (filterRange === '3M') {
+        startDate = new Date();
+        startDate.setMonth(now.getMonth() - 3);
+    } else {
+        startDate = earliestDataDate;
+    }
+
+    if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
+    if (startDate > now) startDate = earliestDataDate;
+
+    if (chartMode === 'weekly') {
+        return weeklyData
+            .filter(w => new Date(w.entries[0].date) >= startDate)
+            .map(w => ({
+                label: w.weekId, 
+                weekLabel: w.weekLabel,
+                actual: w.rawAvg, 
+                trend: w.actual, 
+                target: w.target,
+                targetUpper: w.target + TARGET_TOLERANCE,
+                targetLower: w.target - TARGET_TOLERANCE,
+            }));
+    } else {
+        const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+        const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
+        const weightMap = new Map(weights.map(w => [w.date, w.weight]));
+        const allDays = getDaysArray(startDate, now);
+
+        return allDays.map(dateStr => {
+            const wKey = getWeekKey(dateStr);
+            const parentWeek = weekMap.get(wKey);
+            
+            let dailyTarget = 0;
+            let targetFound = false;
+
+            if (parentWeek) {
+                const dayNum = new Date(dateStr).getDay(); 
+                const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
+                const weekStartTarget = parentWeek.target - rate;
+                const dailyProgress = (dayIndex + 1) / 7;
+                dailyTarget = weekStartTarget + (rate * dailyProgress);
+                targetFound = true;
+            }
+
+            return {
+                label: dateStr,
+                actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
+                trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
+                target: targetFound ? dailyTarget : 0,
+                targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
+                targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
+            };
+        }).filter(p => p.target !== 0); 
+    }
+  }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
+
+  // --- ACTIONS ---
+  const resetSettingsForm = () => {
+     if (settings) {
+        const wRate = settings.weeklyRate || 0;
+        const isNegative = wRate < 0;
+        const absRate = Math.abs(wRate);
+        setGoalType(isNegative ? 'lose' : 'gain');
+        setWeeklyRate(absRate.toString());
+        setMonthlyRate((absRate * 4.345).toFixed(2));
+     }
+  };
+
+  const handleNavigation = (targetView: 'dashboard' | 'settings') => {
+    if (view === 'settings' && targetView === 'dashboard') resetSettingsForm();
+    setView(targetView);
+  };
+
+  const handleRateChange = (val: string, type: 'weekly' | 'monthly') => {
+    const sanitizedVal = val.replace(',', '.');
+    if (sanitizedVal === '') { setWeeklyRate(''); setMonthlyRate(''); return; }
+    if (sanitizedVal === '.') { type === 'weekly' ? setWeeklyRate('.') : setMonthlyRate('.'); return; }
+    const num = parseFloat(sanitizedVal);
+    if (isNaN(num)) { type === 'weekly' ? setWeeklyRate(sanitizedVal) : setMonthlyRate(sanitizedVal); return; }
+    if (type === 'weekly') {
+        setWeeklyRate(sanitizedVal);
+        setMonthlyRate((num * 4.345).toFixed(2));
+    } else {
+        setMonthlyRate(sanitizedVal);
+        setWeeklyRate((num / 4.345).toFixed(2));
+    }
+  };
 
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !newWeight) return;
-    
+    if (!weightInput || !user) return;
     try {
-      await setDoc(doc(collection(db, `users/${user.uid}/weights`)), {
-        weight: parseFloat(newWeight),
-        date: serverTimestamp(),
-        timestamp: Date.now()
+      const sanitizedWeight = parseFloat(weightInput.replace(',', '.'));
+      // @ts-ignore
+      await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
+        weight: sanitizedWeight,
+        date: dateInput,
+        createdAt: serverTimestamp()
       });
-      setNewWeight('');
-      setShowAddModal(false);
+      setWeightInput('');
     } catch (err) {
-      console.error(err);
+      console.error("Error adding weight:", err);
+      alert("Error saving.");
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if(!user || !confirm('Delete this entry?')) return;
-    await deleteDoc(doc(db, `users/${user.uid}/weights`, id));
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    try {
+      let rate = parseFloat(weeklyRate);
+      if (goalType === 'lose') rate = -Math.abs(rate);
+      else rate = Math.abs(rate);
+
+      // @ts-ignore
+      await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
+        weeklyRate: rate,
+        updatedAt: serverTimestamp()
+      });
+      setView('dashboard');
+    } catch (err) {
+      console.error("Error saving settings:", err);
+    }
   };
 
-  const handleLogin = () => signInWithPopup(auth, googleProvider);
-  const handleLogout = () => signOut(auth);
+  const handleDeleteEntry = async (id: string) => {
+    if (!confirm("Delete this entry?")) return;
+    if (!user) return;
+    try {
+      // @ts-ignore
+      await deleteDoc(doc(db, 'users', user.uid, 'weights', id));
+    } catch (err) {
+      console.error("Delete error", err);
+    }
+  };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-black"><Activity className="animate-bounce text-indigo-500" /></div>;
+  const toggleWeek = (weekId: string) => {
+    setExpandedWeeks(prev => 
+      prev.includes(weekId) ? prev.filter(id => id !== weekId) : [...prev, weekId]
+    );
+  };
 
-  if (!user) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-black p-6">
-        <div className="bg-zinc-900 p-8 rounded-2xl shadow-xl max-w-md w-full text-center border border-zinc-800">
-          <div className="bg-indigo-500/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6">
-            <TrendingDown className="w-8 h-8 text-indigo-400" />
-          </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Weight Tracker</h1>
-          <p className="text-zinc-400 mb-8">Track your progress with smart trends and adaptive advice.</p>
-          <button onClick={handleLogin} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-500 transition flex items-center justify-center gap-2">
-            <LogIn className="w-5 h-5" />
-            Sign in with Google
-          </button>
-        </div>
+  const getRateAdherenceColor = (rate: number) => {
+    if (!settings) return 'text-slate-500';
+    const targetRate = settings.weeklyRate;
+    const deviation = Math.abs(rate - targetRate);
+    if (deviation <= RATE_TOLERANCE_GREEN) return 'text-emerald-400';
+    if (deviation <= RATE_TOLERANCE_ORANGE) return 'text-amber-400';
+    return 'text-rose-400'; 
+  };
+
+  // --- ADVICE LOGIC ---
+  const getAdvice = () => {
+    if (!settings) return null;
+    
+    // Convert to absolute target to compare magnitude
+    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
+    
+    // We analyze the gap. 
+    // If GAINING: Target 0.2. 
+    //   If rate < 0.1 (Too slow/Stall) -> Add Cals
+    //   If rate > 0.35 (Too fast) -> Cut Cals
+    // If LOSING: Target -0.5. (We treat magnitude)
+    //   If rate > -0.2 (e.g. -0.1 or +0.1) -> Loss is too slow -> Cut Cals
+    //   If rate < -0.8 -> Loss is too fast -> Add Cals
+
+    const rate = currentTrendRate;
+    let status: 'ok' | 'slow' | 'fast' = 'ok';
+    let action: 'none' | 'add' | 'remove' = 'none';
+    
+    if (goalType === 'gain') {
+        if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
+        else if (rate > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
+    } else {
+        // Lose logic (rates are negative)
+        const targetSigned = -targetAbs;
+        // e.g. Target -0.5. Rate -0.1. (-0.1 > -0.4) -> Slow loss
+        if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
+        // e.g. Target -0.5. Rate -0.8. (-0.8 < -0.65) -> Fast loss
+        else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
+    }
+
+    if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
+    
+    if (action === 'add') return { 
+        color: 'bg-amber-500/10 border-amber-500/20 text-amber-200', 
+        text: goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.' 
+    };
+    
+    if (action === 'remove') return { 
+        color: 'bg-rose-500/10 border-rose-500/20 text-rose-200', 
+        text: goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.' 
+    };
+    
+    return null;
+  };
+
+  const advice = getAdvice();
+
+  // --- DRAG & SNAP LOGIC ---
+  const isDraggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    setIsDragging(true);
+    isDraggingRef.current = true;
+    startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    startHeightRef.current = chartHeight;
+    
+    document.body.style.userSelect = 'none'; 
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    window.addEventListener('touchmove', handleDragMove, { passive: false });
+    window.addEventListener('touchend', handleDragEnd);
+  };
+
+  const handleDragMove = (e: MouseEvent | TouchEvent) => {
+    if (!isDraggingRef.current) return;
+    
+    if (e.cancelable) e.preventDefault();
+    if (e.type === 'touchmove') e.stopImmediatePropagation();
+
+    const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+    const delta = clientY - startYRef.current;
+    
+    const newHeight = Math.max(HEIGHT_COMPRESSED, Math.min(HEIGHT_EXPANDED, startHeightRef.current + delta));
+    setChartHeight(newHeight);
+  };
+
+  const handleDragEnd = () => {
+    isDraggingRef.current = false;
+    setIsDragging(false);
+    document.body.style.userSelect = '';
+    
+    setChartHeight(prev => {
+        if (prev > SNAP_THRESHOLD) return HEIGHT_EXPANDED;
+        return HEIGHT_COMPRESSED;
+    });
+
+    window.removeEventListener('mousemove', handleDragMove);
+    window.removeEventListener('mouseup', handleDragEnd);
+    window.removeEventListener('touchmove', handleDragMove);
+    window.removeEventListener('touchend', handleDragEnd);
+  };
+
+  const toggleExpand = () => {
+      if (!isDraggingRef.current) {
+          setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
+      }
+  };
+
+  // --- CHART COMPONENT ---
+  const ChartRenderer = ({ data, mode, height, width }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number }) => {
+    if (!data || data.length === 0) return (
+      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
+        <p className="text-sm">Log data to see trend</p>
       </div>
     );
-  }
+    
+    const renderWidth = width > 0 ? width : 100;
+    const expanded = height > SNAP_THRESHOLD;
+    
+    // Padding: Left maintained at 32 for Y-axis text
+    const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
-  return (
-    <div className="min-h-screen bg-black pb-20 sm:pb-0 text-zinc-100">
-      <div className="max-w-md mx-auto min-h-screen bg-black shadow-2xl overflow-hidden relative">
-        
-        {/* HEADER */}
-        <header className="bg-indigo-900/20 text-white p-6 pt-12 pb-8 rounded-b-[2.5rem] relative z-10 border-b border-indigo-500/10">
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <p className="text-indigo-300 text-sm font-medium mb-1">Current Weight</p>
-              <h1 className="text-4xl font-bold tracking-tight">
-                {currentWeight > 0 ? currentWeight.toFixed(1) : '--'}
-                <span className="text-lg font-normal text-indigo-300 ml-1">kg</span>
-              </h1>
-            </div>
-            <button onClick={() => setSettingsOpen(!settingsOpen)} className="p-2 bg-white/5 rounded-full hover:bg-white/10 backdrop-blur-sm transition border border-white/5">
-              <Settings className="w-5 h-5 text-indigo-200" />
-            </button>
-          </div>
+    const validValues = data.flatMap(d => {
+        const vals = [];
+        if (d.actual !== null) vals.push(d.actual);
+        if (d.trend !== null) vals.push(d.trend);
+        vals.push(d.targetUpper, d.targetLower);
+        return vals;
+    });
+    
+    const rawMin = Math.min(...validValues);
+    const rawMax = Math.max(...validValues);
+    const rawRange = rawMax - rawMin || 1;
+    const buffer = rawRange * 0.05; 
+    
+    const minVal = rawMin - buffer;
+    const maxVal = rawMax + buffer;
+    const range = maxVal - minVal || 1;
 
-          <div className="flex gap-4">
-            <div className="bg-black/20 backdrop-blur-md rounded-xl p-3 flex-1 border border-indigo-500/10">
-              <p className="text-indigo-300 text-xs uppercase font-bold tracking-wider mb-1">Latest Change</p>
-              <div className="flex items-center gap-1">
-                {weightChange <= 0 ? <TrendingDown className="w-4 h-4 text-emerald-400" /> : <TrendingUp className="w-4 h-4 text-rose-400" />}
-                <span className="font-semibold">{Math.abs(weightChange).toFixed(1)} kg</span>
-              </div>
-            </div>
-            <div className="bg-black/20 backdrop-blur-md rounded-xl p-3 flex-1 border border-indigo-500/10">
-              <p className="text-indigo-300 text-xs uppercase font-bold tracking-wider mb-1">7-Day Trend</p>
-              <div className="flex items-center gap-1">
-                <Calendar className="w-4 h-4 text-indigo-300" />
-                <span className="font-semibold">{currentTrendRate > 0 ? '+' : ''}{currentTrendRate.toFixed(2)} kg</span>
-              </div>
-            </div>
-          </div>
-        </header>
+    const availableWidth = renderWidth - padding.left - padding.right;
+    const count = data.length;
+    const denominator = count > 1 ? count - 1 : 1;
+    
+    const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
+    const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
-        {/* SETTINGS PANEL (Collapsible) */}
-        {settingsOpen && (
-          <div className="bg-zinc-900 p-4 border-b border-zinc-800 animate-in slide-in-from-top-4">
-            <h3 className="font-bold text-zinc-100 mb-3 flex items-center gap-2">
-              <Target className="w-4 h-4" /> Goal Settings
-            </h3>
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                {['lose', 'maintain', 'gain'].map(type => (
-                  <button 
-                    key={type}
-                    onClick={() => setSettings({...settings, goalType: type as any})}
-                    className={`flex-1 py-2 text-xs font-bold uppercase rounded-lg border transition-colors ${settings.goalType === type ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:bg-zinc-700'}`}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
-              <div>
-                <label className="text-xs text-zinc-500 mb-1 block">Target Rate (kg/week)</label>
-                <input 
-                  type="number" 
-                  step="0.1" 
-                  value={settings.targetRate} 
-                  onChange={(e) => setSettings({...settings, targetRate: parseFloat(e.target.value)})}
-                  className="w-full p-2 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-100 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                />
-              </div>
-              <button onClick={handleLogout} className="w-full py-2 text-red-400 text-xs font-bold flex items-center justify-center gap-1 mt-2 hover:bg-red-900/20 rounded-lg transition-colors">
-                <LogOut className="w-3 h-3" /> Sign Out
-              </button>
-            </div>
-          </div>
-        )}
+    // --- GRID LINES ---
+    const gridCount = 5;
+    const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-        {/* MAIN CONTENT */}
-        <main className="p-6 -mt-4 relative z-20">
+    // --- AREA POINTS ---
+    const areaPoints = [
+        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
+        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
+    ].join(' ');
+
+    let trendPath = '';
+    if (count > 1) {
+        let lastValidT = -1;
+        data.forEach((d, i) => {
+            if (d.trend === null) return;
+            const x = getX(i);
+            const y = getY(d.trend);
+            if (lastValidT === -1) trendPath += `M ${x},${y} `;
+            else {
+                const distance = i - lastValidT;
+                if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
+                else trendPath += `L ${x},${y} `; 
+            }
+            lastValidT = i;
+        });
+    }
+
+    // --- SMART AXIS LOGIC ---
+    // Minimum pixels required between two X-axis labels
+    const minLabelSpacing = 35; 
+    let lastRenderedX = -999;
+    const lastPointX = getX(data.length - 1);
+
+    return (
+      <div 
+        className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
+        style={{height: height}}
+      >
+        <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
-          {/* Controls */}
-          <div className="flex justify-between items-center mb-4 px-1">
-            <h2 className="font-bold text-zinc-100">Overview</h2>
-            <div className="flex bg-zinc-900 p-1 rounded-lg border border-zinc-800">
-              <button 
-                onClick={() => setViewMode('daily')}
-                className={`px-3 py-1 rounded-md text-xs font-semibold transition ${viewMode === 'daily' ? 'bg-zinc-800 text-indigo-400 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-              >
-                Daily
-              </button>
-              <button 
-                onClick={() => setViewMode('weekly')}
-                className={`px-3 py-1 rounded-md text-xs font-semibold transition ${viewMode === 'weekly' ? 'bg-zinc-800 text-indigo-400 shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-              >
-                Week
-              </button>
-            </div>
-          </div>
+          {/* HORIZONTAL GRID & Y-AXIS LABELS (Always Visible) */}
+          {gridStops.map((val, idx) => (
+             <g key={idx}>
+               <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
+               <text x={padding.left - 6} y={getY(val) + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
+             </g>
+          ))}
+          
+          <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
+          <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* Graph */}
-          <WeightGraph 
-            data={processedData} 
-            onShowInfo={() => setShowGraphInfo(true)} 
-          />
-
-          {/* Info Modal for Graph */}
-          {showGraphInfo && (
-            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-6 animate-in fade-in">
-              <div className="bg-zinc-900 rounded-2xl p-6 max-w-sm w-full shadow-2xl relative border border-zinc-800">
-                <h3 className="text-lg font-bold text-zinc-100 mb-2 flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-indigo-500" />
-                  Understanding the Graph
-                </h3>
-                <div className="space-y-3 text-sm text-zinc-400">
-                  <p><strong className="text-indigo-400">Solid Line (EMA):</strong> This is the Exponential Moving Average. It smooths out daily water weight fluctuations to show your true trend.</p>
-                  <p><strong className="text-zinc-500">Dashed Line:</strong> Your raw scale measurements.</p>
-                  <p>Focus on the solid line to gauge true progress.</p>
-                </div>
-                <button 
-                  onClick={() => setShowGraphInfo(false)}
-                  className="mt-6 w-full bg-zinc-800 text-zinc-200 py-3 rounded-xl font-semibold hover:bg-zinc-700 transition"
-                >
-                  Got it
-                </button>
-              </div>
-            </div>
+          {/* TUNNEL */}
+          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
+          
+          {/* TREND LINE */}
+          <defs>
+            <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
+                {data.map((d, i) => {
+                    if (d.trend === null) return null;
+                    const offset = (i / denominator) * 100;
+                    const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
+                    return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#10b981"} />;
+                })}
+            </linearGradient>
+          </defs>
+          
+          {count > 1 && (
+              <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
           )}
 
-          {/* Smart Advice Section */}
-          <SmartAdvice 
-            currentTrend={currentTrendRate} 
-            settings={settings}
-          />
+          {/* DATA POINTS */}
+          {data.map((d, i) => {
+             if (d.actual === null) return null;
+             const px = getX(i);
+             const py = getY(d.actual);
+             
+             return (
+                <g key={i}>
+                    <circle 
+                        cx={px} 
+                        cy={py} 
+                        r={expanded ? 3.5 : 2} 
+                        fill="#94a3b8" 
+                        opacity={expanded ? "0.9" : "0.6"}
+                    />
+                    {expanded && (
+                        <text x={px} y={py - 12} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
+                            {d.actual.toFixed(1)}
+                        </text>
+                    )}
+                </g>
+             );
+          })}
 
-          {/* History List */}
-          <div className="mt-8">
-            <h3 className="font-bold text-zinc-100 mb-4 px-1">History</h3>
-            <div className="space-y-3">
-              {weights.map((entry, idx) => {
-                const prev = weights[idx + 1]?.weight;
-                const diff = prev ? entry.weight - prev : 0;
-                return (
-                  <div key={entry.id} className="bg-zinc-900 p-4 rounded-xl border border-zinc-800 flex items-center justify-between shadow-sm hover:border-zinc-700 transition group">
-                    <div className="flex items-center gap-4">
-                      <div className="bg-zinc-800 p-2.5 rounded-full text-zinc-500">
-                        <Clock className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <p className="font-bold text-zinc-200">{entry.weight} kg</p>
-                        <p className="text-xs text-zinc-500">{formatDate(entry.date)}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      <span className={`text-xs font-semibold px-2 py-1 rounded-full ${diff <= 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                        {diff > 0 ? '+' : ''}{diff.toFixed(1)}
-                      </span>
-                      <button onClick={() => handleDelete(entry.id)} className="text-zinc-600 hover:text-red-400 transition">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </main>
+          {/* SMART X-AXIS LABELS */}
+          {data.map((d, i) => {
+             const xPos = getX(i);
+             const isFirst = i === 0;
+             const isLast = i === data.length - 1;
+             
+             let shouldRender = false;
+             let anchor: "start" | "middle" | "end" = "middle";
 
-        {/* FLOATING ACTION BUTTON */}
-        <div className="fixed bottom-6 right-6 lg:absolute lg:bottom-6 lg:right-6">
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="bg-indigo-600 hover:bg-indigo-500 text-white w-14 h-14 rounded-full shadow-lg shadow-indigo-900/50 flex items-center justify-center transition-transform hover:scale-105 active:scale-95"
-          >
-            <Plus className="w-6 h-6" />
-          </button>
+             // 1. Always render First
+             if (isFirst) {
+                 shouldRender = true;
+                 anchor = "start";
+             }
+             // 2. Always render Last
+             else if (isLast) {
+                 shouldRender = true;
+                 anchor = "end";
+             }
+             // 3. Render intermediate if space permits (Buffer Zone Logic)
+             else {
+                 const distToLast = lastPointX - xPos;
+                 const distToPrev = xPos - lastRenderedX;
+                 
+                 // Must clear BOTH the Previous label AND the Final label
+                 if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
+                     shouldRender = true;
+                 }
+             }
+
+             if (!shouldRender) return null;
+
+             // Update tracker only if we actually rendered
+             lastRenderedX = xPos;
+
+             return (
+                <text key={i} x={xPos} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
+                    {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
+                </text>
+             );
+          })}
+        </svg>
+      </div>
+    );
+  };
+
+  if (loading) return (
+    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50">
+        <div className="text-blue-500 animate-pulse font-bold text-lg flex items-center gap-3">
+            <Activity size={24} /> Loading RateTracker...
         </div>
+    </div>
+  );
 
-        {/* ADD WEIGHT MODAL */}
-        {showAddModal && (
-          <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4">
-            <form onSubmit={handleAddWeight} className="bg-zinc-900 w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 border border-zinc-800 animate-in slide-in-from-bottom-10">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-white">Log Weight</h3>
-                <button type="button" onClick={() => setShowAddModal(false)} className="text-zinc-500 hover:text-zinc-300">Close</button>
-              </div>
-              
-              <div className="mb-6">
-                <div className="relative">
-                  <input 
-                    autoFocus
-                    type="number" 
-                    step="0.1" 
-                    value={newWeight}
-                    onChange={(e) => setNewWeight(e.target.value)}
-                    placeholder="0.0"
-                    className="w-full text-center text-5xl font-bold text-white bg-transparent border-none focus:ring-0 placeholder:text-zinc-700 p-4"
-                  />
-                  <span className="absolute right-8 top-1/2 -translate-y-1/2 text-zinc-600 font-medium">kg</span>
+  if (!user) return (
+    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 grid place-items-center p-6 overflow-hidden overscroll-none">
+        <div className="fixed inset-0 bg-slate-950 -z-10" />
+        <div className="max-w-xs text-center w-full">
+            <Activity size={48} className="text-blue-500 mx-auto mb-4" />
+            <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
+            <p className="text-slate-400">Track your progress securely.</p>
+            <div className="mt-8">
+                <button onClick={handleGoogleLogin} className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full justify-center">
+                    <LogIn size={20} /> Sign in with Google
+                </button>
+            </div>
+        </div>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
+      
+      <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
+        <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
+        <div className="flex gap-2">
+            <button 
+                onClick={() => handleNavigation(view === 'settings' ? 'dashboard' : 'settings')} 
+                className="p-2 hover:bg-slate-800 rounded-full transition-colors"
+            >
+                <Settings size={20} className={view === 'settings' ? "text-blue-400" : "text-slate-400"} />
+            </button>
+            <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-red-400">
+                <LogOut size={20} />
+            </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto w-full">
+        <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-full flex flex-col' : 'space-y-5'}`}>
+            
+            {view === 'dashboard' && (
+            <>
+                <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Trend Weight</p>
+                        <p className="text-2xl font-bold text-white truncate">
+                        {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
+                        <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
+                        </p>
+                    </div>
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Rate</p>
+                        <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentTrendRate)}`}>
+                        {currentTrendRate > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                        {Math.abs(currentTrendRate).toFixed(2)} kg
+                        </div>
+                    </div>
                 </div>
-              </div>
 
-              <button 
-                type="submit"
-                disabled={!newWeight} 
-                className="w-full bg-indigo-600 disabled:bg-zinc-800 disabled:text-zinc-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg hover:shadow-indigo-900/20 transition"
-              >
-                Save Entry
-              </button>
-            </form>
-          </div>
-        )}
+                {advice && (
+                    <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color}`}>
+                        <Utensils size={18} className="shrink-0 mt-0.5" />
+                        <span className="text-sm font-semibold">{advice.text}</span>
+                    </div>
+                )}
 
+                <section className="flex flex-col" ref={containerRef}>
+                    <div className="flex justify-between items-end mb-2 px-1 flex-wrap gap-2">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
+                                <button 
+                                    onClick={() => setShowExplanation(!showExplanation)}
+                                    className="text-slate-500 hover:text-blue-400 transition-colors p-1"
+                                >
+                                    <Info size={14} />
+                                </button>
+                            </div>
+                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                             <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+                                <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
+                                <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
+                                <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
+                            </div>
+                            
+                            <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+                                <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
+                                <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} />
+                    
+                    <div 
+                        className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
+                        style={{ touchAction: 'none' }} 
+                    >
+                        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>Tunnel</div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
+                        </div>
+
+                        {showExplanation && (
+                            <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
+                                <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
+                                    <Info size={12} className="text-blue-500" /> EMA model
+                                </div>
+                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
+                            </div>
+                        )}
+
+                        <div 
+                            className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg"
+                            onMouseDown={handleDragStart}
+                            onTouchStart={handleDragStart}
+                            onClick={toggleExpand}
+                        >
+                            <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
+                    <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
+                        <div className="flex gap-2">
+                            <input 
+                                type="text" inputMode="decimal" placeholder="0.0" required 
+                                className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
+                                value={weightInput} 
+                                onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
+                            />
+                            <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
+                        </div>
+                        <div className="relative">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
+                            <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
+                        </div>
+                    </form>
+                </div>
+
+                <section>
+                    <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
+                    <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
+                        <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        <div>Week</div>
+                        <div className="text-right">Trend</div>
+                        <div className="text-right pr-4">Δ</div> 
+                        <div className="w-5"></div>
+                        </div>
+                        <div className="divide-y divide-slate-800">
+                        {weeklyData.slice().reverse().map((item) => {
+                            const isExpanded = expandedWeeks.includes(item.weekId);
+                            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
+                            return (
+                            <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
+                                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
+                                <div className="flex flex-col">
+                                    <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
+                                    <span className="text-[10px] text-slate-500">{item.count} entries</span>
+                                </div>
+                                <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
+                                <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
+                                    {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
+                                </div>
+                                <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
+                                </div>
+                                {isExpanded && (
+                                <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
+                                    <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
+                                        <span>Daily Entries</span>
+                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Trend: On Track' : 'Trend: Deviated'}</span>
+                                    </div>
+                                    <div className="space-y-2">
+                                    {item.entries.map((entry) => (
+                                        <div key={entry.id} className="flex justify-between items-center text-sm">
+                                        <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
+                                        <div className="flex items-center gap-3">
+                                            <span className="font-medium text-slate-300">{entry.weight} kg</span>
+                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
+                                        </div>
+                                        </div>
+                                    ))}
+                                    </div>
+                                </div>
+                                )}
+                            </div>
+                            );
+                        })}
+                        </div>
+                    </div>
+                </section>
+            </>
+            )}
+
+            {view === 'settings' && (
+            <div className="flex flex-col h-full">
+                <div className="flex items-center gap-2 mb-4 shrink-0">
+                    <button onClick={() => handleNavigation('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+                        <ChevronRight className="rotate-180 text-slate-400" size={20} />
+                    </button>
+                    <h2 className="font-bold text-lg text-white">Plan Settings</h2>
+                </div>
+
+                <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-6 flex-1 flex flex-col">
+                    <div className="flex bg-slate-800 p-1 rounded-xl mb-2">
+                        <button 
+                            type="button"
+                            onClick={() => setGoalType('gain')}
+                            className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'gain' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
+                        >
+                            Gain Weight (+)
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={() => setGoalType('lose')}
+                            className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'lose' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
+                        >
+                            Lose Weight (-)
+                        </button>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Weekly Rate (kg/wk)</label>
+                        <input 
+                            type="text" inputMode="decimal" required 
+                            value={weeklyRate} 
+                            onChange={(e) => handleRateChange(e.target.value, 'weekly')}
+                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                            placeholder="0.2"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Monthly Rate (kg/mo)</label>
+                        <input 
+                            type="text" inputMode="decimal" required 
+                            value={monthlyRate} 
+                            onChange={(e) => handleRateChange(e.target.value, 'monthly')}
+                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                            placeholder="0.87"
+                        />
+                    </div>
+
+                    <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
+                        <p className="leading-relaxed">
+                            The chart tunnel is ±{TARGET_TOLERANCE}kg tolerance from your smoothed Trend Weight.
+                        </p>
+                    </div>
+
+                    <div className="pt-4 mt-auto">
+                        <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
+                            Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
+                        </button>
+                    </div>
+                </form>
+            </div>
+            )}
+        </div>
       </div>
     </div>
   );
