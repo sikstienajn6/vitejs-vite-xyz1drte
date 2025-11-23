@@ -83,6 +83,16 @@ interface WeeklySummary {
   inTunnel: boolean; 
 }
 
+interface ChartPoint {
+    label: string;
+    actual: number | null; // Null means gap
+    target: number | null;
+    targetUpper: number | null;
+    targetLower: number | null;
+    isGap?: boolean;
+    weekLabel?: string; // For weekly view
+}
+
 // --- Helper Functions ---
 const getWeekKey = (date: string) => {
   const d = new Date(date);
@@ -110,6 +120,7 @@ export default function App() {
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
+  const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   
   // Rate Inputs
@@ -139,7 +150,7 @@ export default function App() {
     await signOut(auth);
   };
 
-  // --- DATA FETCHING & FORM INIT ---
+  // --- DATA FETCHING ---
   useEffect(() => {
     if (!user) {
       setWeights([]);
@@ -161,7 +172,6 @@ export default function App() {
         const s = snapshot.data() as SettingsData;
         setSettings(s);
         
-        // Initialize local state from DB
         const wRate = s.weeklyRate ? s.weeklyRate : 0;
         const isNegative = wRate < 0;
         const absRate = Math.abs(wRate);
@@ -243,44 +253,130 @@ export default function App() {
     return last.delta;
   }, [weeklyData]);
 
-  // --- DAILY CHART DATA PREP ---
-  const dailyChartData = useMemo(() => {
-    if (chartMode !== 'daily' || !settings) return [];
+  // --- CHART DATA PREP (Gaps & Filters) ---
+  const finalChartData = useMemo<ChartPoint[]>(() => {
+    if (weeklyData.length === 0 || !settings) return [];
+
+    // 1. Determine Cutoff Date based on Filter
+    const now = new Date();
+    let cutoffDate = new Date('2000-01-01'); // Default ALL
+    if (filterRange === '1M') {
+        cutoffDate = new Date();
+        cutoffDate.setMonth(now.getMonth() - 1);
+    } else if (filterRange === '3M') {
+        cutoffDate = new Date();
+        cutoffDate.setMonth(now.getMonth() - 3);
+    }
+
+    // 2. Prepare raw data
+    let rawPoints: ChartPoint[] = [];
+
+    if (chartMode === 'weekly') {
+        rawPoints = weeklyData
+            .filter(w => new Date(w.entries[0].date) >= cutoffDate)
+            .map(w => ({
+                label: w.weekId, // Use ID for gap sorting
+                weekLabel: w.weekLabel,
+                actual: w.actual,
+                target: w.target,
+                targetUpper: w.targetUpper,
+                targetLower: w.targetLower,
+                isGap: false
+            }));
+    } else {
+        // Daily Mode
+        const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+        const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
+        
+        // Filter weights first
+        const filteredWeights = weights
+            .filter(e => new Date(e.date) >= cutoffDate)
+            .sort((a, b) => a.date.localeCompare(b.date));
+
+        rawPoints = filteredWeights.map(entry => {
+            const wKey = getWeekKey(entry.date);
+            const parentWeek = weekMap.get(wKey);
+            let dailyTarget = entry.weight;
+            
+            if (parentWeek) {
+                const dayNum = new Date(entry.date).getDay(); 
+                const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
+                const weekStartTarget = parentWeek.target - rate;
+                const dailyProgress = (dayIndex + 1) / 7;
+                dailyTarget = weekStartTarget + (rate * dailyProgress);
+            }
+
+            return {
+                label: entry.date, // Use YYYY-MM-DD for sorting
+                actual: entry.weight,
+                target: dailyTarget,
+                targetUpper: dailyTarget + TUNNEL_TOLERANCE,
+                targetLower: dailyTarget - TUNNEL_TOLERANCE,
+                isGap: false
+            };
+        });
+    }
+
+    if (rawPoints.length < 2) return rawPoints;
+
+    // 3. Inject Gaps
+    const processed: ChartPoint[] = [];
     
-    const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+    for (let i = 0; i < rawPoints.length; i++) {
+        const current = rawPoints[i];
+        
+        if (i > 0) {
+            const prev = rawPoints[i-1];
+            
+            if (chartMode === 'daily') {
+                // Check for missing days
+                const currDate = new Date(current.label);
+                const prevDate = new Date(prev.label);
+                const diffTime = Math.abs(currDate.getTime() - prevDate.getTime());
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
 
-    return sortedWeights.map(entry => {
-        const wKey = getWeekKey(entry.date);
-        const parentWeek = weekMap.get(wKey);
-        
-        let dailyTarget = entry.weight; 
-        
-        if (parentWeek) {
-            const dayNum = new Date(entry.date).getDay(); // 0=Sun
-            const dayIndex = dayNum === 0 ? 6 : dayNum - 1; // Mon=0
-            
-            const weekStartTarget = parentWeek.target - rate;
-            const dailyProgress = (dayIndex + 1) / 7;
-            
-            dailyTarget = weekStartTarget + (rate * dailyProgress);
+                if (diffDays > 1) {
+                    // Inject Gap
+                    processed.push({
+                        label: 'gap',
+                        actual: null,
+                        target: null,
+                        targetUpper: null,
+                        targetLower: null,
+                        isGap: true
+                    });
+                }
+            } else {
+                 // Weekly Gap Detection (Check if week numbers are sequential)
+                 // Simple check: diff in ISO string > 1 week?
+                 // A better way is parsing the "2025-W12" format, but for simplicity:
+                 // If filtered weights are sparse, we assume gaps.
+                 // Actually, let's stick to a simple logic: If the gap > 1 item index in the original FULL array?
+                 // Easier: Just check current vs previous ID string. 
+                 // If "2025-W10" follows "2025-W08", inject gap.
+                 const currParts = current.label.split('-W'); // 2025, 10
+                 const prevParts = prev.label.split('-W');    // 2025, 08
+                 
+                 if (currParts[0] === prevParts[0]) {
+                    const diff = parseInt(currParts[1]) - parseInt(prevParts[1]);
+                    if (diff > 1) {
+                         processed.push({ ...current, actual: null, isGap: true });
+                    }
+                 } else {
+                     // Different years, just inject gap to be safe
+                     processed.push({ ...current, actual: null, isGap: true });
+                 }
+            }
         }
+        processed.push(current);
+    }
 
-        return {
-            label: formatDate(entry.date),
-            actual: entry.weight,
-            target: dailyTarget,
-            targetUpper: dailyTarget + TUNNEL_TOLERANCE,
-            targetLower: dailyTarget - TUNNEL_TOLERANCE,
-        };
-    });
-  }, [weights, weeklyData, chartMode, settings]);
+    return processed;
+  }, [weeklyData, weights, chartMode, settings, filterRange]);
 
 
   // --- ACTIONS ---
   const resetSettingsForm = () => {
-     // Resets local form state to match Database state (Discard changes)
      if (settings) {
         const wRate = settings.weeklyRate || 0;
         const isNegative = wRate < 0;
@@ -293,7 +389,7 @@ export default function App() {
 
   const handleNavigation = (targetView: 'dashboard' | 'settings') => {
     if (view === 'settings' && targetView === 'dashboard') {
-        resetSettingsForm(); // Discard unsaved changes
+        resetSettingsForm(); 
     }
     setView(targetView);
   };
@@ -394,8 +490,8 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode }: { data: any[], mode: 'weekly' | 'daily' }) => {
+  // --- CHART COMPONENT (Handle Gaps) ---
+  const ChartRenderer = ({ data, mode }: { data: ChartPoint[], mode: 'weekly' | 'daily' }) => {
     if (!data || data.length < 2) return (
       <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
         <p className="text-sm">Log more data to see trend</p>
@@ -407,7 +503,8 @@ export default function App() {
     const padding = 30;
     const marginBottom = 20; 
 
-    const allValues = data.flatMap(d => [d.actual, d.targetUpper, d.targetLower]);
+    // Calculate Min/Max ignoring Nulls
+    const allValues = data.flatMap(d => d.actual !== null ? [d.actual, d.targetUpper!, d.targetLower!] : []);
     const minVal = Math.min(...allValues) - 0.2;
     const maxVal = Math.max(...allValues) + 0.2;
     const range = maxVal - minVal || 1;
@@ -415,15 +512,54 @@ export default function App() {
     const getX = (i: number) => padding + (i / (data.length - 1)) * (width - 2 * padding);
     const getY = (val: number) => (height - marginBottom) - padding - ((val - minVal) / range) * ((height - marginBottom) - 2 * padding);
 
-    const labelInterval = mode === 'daily' ? Math.ceil(data.length / 6) : 1;
-
-    const actualPath = data.map((d, i) => `${getX(i)},${getY(d.actual)}`).join(' ');
-    const targetPath = data.map((d, i) => `${getX(i)},${getY(d.target)}`).join(' ');
+    // GENERATE PATHS WITH BREAKS (M vs L)
+    let actualPath = '';
+    let targetPath = '';
+    let areaPathTop = '';
+    let areaPathBottom = '';
     
-    const areaPoints = [
-        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
-        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
-    ].join(' ');
+    data.forEach((d, i) => {
+        if (d.isGap || d.actual === null) {
+            // Gap detected? Next point must be a Move (M)
+            return;
+        }
+        
+        const x = getX(i);
+        const yActual = getY(d.actual);
+        const yTarget = getY(d.target!);
+        const yTop = getY(d.targetUpper!);
+        const yBottom = getY(d.targetLower!);
+
+        const cmd = (i === 0 || data[i-1].isGap) ? 'M' : 'L';
+
+        actualPath += `${cmd} ${x},${yActual} `;
+        targetPath += `${cmd} ${x},${yTarget} `;
+        
+        // For area, we build a simple polygon. 
+        // NOTE: Complex gap handling for polygons is hard in SVG. 
+        // Simplification: We render disjoint polygons if there is a gap.
+        // Actually, let's just use line segments for area boundaries for now or it gets very complex to close paths.
+        // Better approach: Render multiple <polygon>s if gaps exist.
+    });
+
+    // Render Polygons Area (Handling Gaps)
+    const areaPolygons = [];
+    let currentSegment: any[] = [];
+
+    data.forEach((d, i) => {
+        if (d.isGap || d.actual === null) {
+            if (currentSegment.length > 0) {
+                areaPolygons.push(currentSegment);
+                currentSegment = [];
+            }
+        } else {
+            currentSegment.push({ x: getX(i), yTop: getY(d.targetUpper!), yBottom: getY(d.targetLower!) });
+        }
+    });
+    if (currentSegment.length > 0) areaPolygons.push(currentSegment);
+
+
+    const labelInterval = mode === 'daily' ? Math.ceil(data.length / 6) : 1;
 
     return (
       <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
@@ -431,11 +567,21 @@ export default function App() {
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
-          <polyline points={targetPath} fill="none" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1" strokeDasharray="4,4" />
+          {/* Render Green Zones (Multiple Polygons if Gaps) */}
+          {areaPolygons.map((seg, idx) => {
+              const points = [
+                  ...seg.map(p => `${p.x},${p.yTop}`),
+                  ...seg.slice().reverse().map(p => `${p.x},${p.yBottom}`)
+              ].join(' ');
+              return <polygon key={idx} points={points} fill="rgba(16, 185, 129, 0.08)" stroke="none" />;
+          })}
+
+          {/* Target Line */}
+          <path d={targetPath} fill="none" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1" strokeDasharray="4,4" />
           
-          <polyline 
-            points={actualPath} 
+          {/* Actual Line */}
+          <path 
+            d={actualPath} 
             fill="none" 
             stroke="#3b82f6" 
             strokeWidth={mode === 'daily' ? "1.5" : "3"} 
@@ -445,7 +591,8 @@ export default function App() {
           />
 
           {data.map((d, i) => {
-             const isOffTrack = Math.abs(d.actual - d.target) > TUNNEL_TOLERANCE;
+             if (d.isGap || d.actual === null) return null;
+             const isOffTrack = Math.abs(d.actual - d.target!) > TUNNEL_TOLERANCE;
              const r = mode === 'daily' ? (isOffTrack ? 2.5 : 2) : (isOffTrack ? 3 : 4);
              
              return (
@@ -462,10 +609,11 @@ export default function App() {
           })}
 
           {data.map((d, i) => {
+             if (d.isGap) return null;
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
                 <text key={i} x={getX(i)} y={height - 5} fontSize="10" fill="#64748b" textAnchor="middle">
-                    {mode === 'weekly' ? d.weekLabel : d.label}
+                    {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                 </text>
              );
           })}
@@ -478,9 +626,7 @@ export default function App() {
 
   if (!user) return (
     <div className="fixed inset-0 w-full bg-slate-950 grid place-items-center p-6 overflow-hidden overscroll-none">
-        {/* BACKGROUND */}
         <div className="fixed inset-0 bg-slate-950 -z-10" />
-        
         <div className="max-w-xs text-center w-full">
             <Activity size={48} className="text-blue-500 mx-auto mb-4" />
             <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
@@ -495,7 +641,6 @@ export default function App() {
   );
 
   return (
-    // FIXED CONTAINER: Locks the app to viewport height, killing overscroll/white bars
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
       {/* Header */}
@@ -514,125 +659,126 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main Scrollable Area */}
       <div className="flex-1 overflow-y-auto w-full">
         <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-full flex flex-col' : 'space-y-5'}`}>
             
             {view === 'dashboard' && (
             <>
                 <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                    <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Avg</p>
-                    <p className="text-2xl font-bold text-white truncate">
-                    {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
-                    <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
-                    </p>
-                </div>
-                <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                    <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week Rate</p>
-                    <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentWeeklyDiff)}`}>
-                    {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                    {Math.abs(currentWeeklyDiff).toFixed(2)} kg
+                    {/* Stats Cards */}
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Avg</p>
+                        <p className="text-2xl font-bold text-white truncate">
+                        {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
+                        <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
+                        </p>
+                    </div>
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week Rate</p>
+                        <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentWeeklyDiff)}`}>
+                        {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                        {Math.abs(currentWeeklyDiff).toFixed(2)} kg
+                        </div>
                     </div>
                 </div>
-                </div>
 
-                {settings && weeklyData.length > 0 && (
-                <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-sm gap-2 border border-slate-700">
-                    <div className="flex items-center gap-2">
-                        <Target size={16} className="text-emerald-400 shrink-0" />
-                        <span>Goal: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
-                    </div>
-                </div>
-                )}
-
+                {/* Chart Controls */}
                 <section>
-                <div className="flex justify-between items-end mb-3 px-1">
-                    <div>
-                        <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                        <p className="text-xs font-normal text-slate-500">Tunnel: ±{TUNNEL_TOLERANCE}kg</p>
+                    <div className="flex justify-between items-end mb-3 px-1 flex-wrap gap-2">
+                        <div>
+                            <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
+                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{TUNNEL_TOLERANCE}kg</p>
+                        </div>
+                        
+                        <div className="flex gap-2">
+                            {/* Range Filter */}
+                             <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+                                <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
+                                <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
+                                <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
+                            </div>
+                            
+                            {/* Weekly/Daily Toggle */}
+                            <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+                                <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Wk</button>
+                                <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
+                            </div>
+                        </div>
                     </div>
-                    
-                    <div className="bg-slate-800 p-1 rounded-lg flex text-xs font-bold">
-                        <button onClick={() => setChartMode('weekly')} className={`px-3 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}>Weekly</button>
-                        <button onClick={() => setChartMode('daily')} className={`px-3 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}>Daily</button>
-                    </div>
-                </div>
-                <ChartRenderer data={chartMode === 'weekly' ? weeklyData : dailyChartData} mode={chartMode}/>
+                    <ChartRenderer data={finalChartData} mode={chartMode}/>
                 </section>
 
+                {/* Log Weight Form */}
                 <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
-                <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
-                <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
-                    <div className="flex gap-2">
-                        <input 
-                            type="text" inputMode="decimal" placeholder="0.0" required 
-                            className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
-                            value={weightInput} 
-                            onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
-                        />
-                        <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
-                    </div>
-                    <div className="relative">
-                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
-                        <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
-                    </div>
-                </form>
+                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
+                    <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
+                        <div className="flex gap-2">
+                            <input 
+                                type="text" inputMode="decimal" placeholder="0.0" required 
+                                className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
+                                value={weightInput} 
+                                onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
+                            />
+                            <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
+                        </div>
+                        <div className="relative">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
+                            <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
+                        </div>
+                    </form>
                 </div>
 
+                {/* History Table */}
                 <section>
-                <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
-                <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
-                    {/* Table Header: Aligned Delta to Right */}
-                    <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    <div>Week</div>
-                    <div className="text-right">Avg</div>
-                    <div className="text-right pr-4">Δ</div> 
-                    <div className="w-5"></div>
-                    </div>
-                    <div className="divide-y divide-slate-800">
-                    {weeklyData.slice().reverse().map((item) => {
-                        const isExpanded = expandedWeeks.includes(item.weekId);
-                        const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
-                        return (
-                        <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
-                            <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
-                            <div className="flex flex-col">
-                                <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
-                                <span className="text-[10px] text-slate-500">{item.count} entries</span>
-                            </div>
-                            <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
-                            
-                            {/* Table Row: Aligned Delta to Right */}
-                            <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
-                                {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
-                            </div>
-                            <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
-                            </div>
-                            {isExpanded && (
-                            <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                                <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
-                                    <span>Daily Entries</span>
-                                    <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Road: On Track' : 'Road: Deviated'}</span>
-                                </div>
-                                <div className="space-y-2">
-                                {item.entries.map((entry) => (
-                                    <div key={entry.id} className="flex justify-between items-center text-sm">
-                                    <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
-                                    <div className="flex items-center gap-3">
-                                        <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                                        <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
-                                    </div>
-                                    </div>
-                                ))}
-                                </div>
-                            </div>
-                            )}
+                    <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
+                    <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
+                        <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        <div>Week</div>
+                        <div className="text-right">Avg</div>
+                        <div className="text-right pr-4">Δ</div> 
+                        <div className="w-5"></div>
                         </div>
-                        );
-                    })}
+                        <div className="divide-y divide-slate-800">
+                        {weeklyData.slice().reverse().map((item) => {
+                            const isExpanded = expandedWeeks.includes(item.weekId);
+                            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
+                            return (
+                            <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
+                                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
+                                <div className="flex flex-col">
+                                    <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
+                                    <span className="text-[10px] text-slate-500">{item.count} entries</span>
+                                </div>
+                                <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
+                                <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
+                                    {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
+                                </div>
+                                <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
+                                </div>
+                                {isExpanded && (
+                                <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
+                                    <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
+                                        <span>Daily Entries</span>
+                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Road: On Track' : 'Road: Deviated'}</span>
+                                    </div>
+                                    <div className="space-y-2">
+                                    {item.entries.map((entry) => (
+                                        <div key={entry.id} className="flex justify-between items-center text-sm">
+                                        <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
+                                        <div className="flex items-center gap-3">
+                                            <span className="font-medium text-slate-300">{entry.weight} kg</span>
+                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
+                                        </div>
+                                        </div>
+                                    ))}
+                                    </div>
+                                </div>
+                                )}
+                            </div>
+                            );
+                        })}
+                        </div>
                     </div>
-                </div>
                 </section>
             </>
             )}
@@ -647,7 +793,6 @@ export default function App() {
                 </div>
 
                 <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-6 flex-1 flex flex-col">
-                    
                     <div className="flex bg-slate-800 p-1 rounded-xl mb-2">
                         <button 
                             type="button"
