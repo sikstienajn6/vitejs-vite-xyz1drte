@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -33,7 +33,8 @@ import {
   LogOut,
   LogIn,
   AlertCircle,
-  GripHorizontal
+  Maximize2,
+  Minimize2
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -56,6 +57,7 @@ const TARGET_TOLERANCE = 0.2;
 const EMA_ALPHA = 0.1; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
+const BREAK_LINE_THRESHOLD_DAYS = 7; 
 
 // --- Types ---
 interface WeightEntry {
@@ -127,13 +129,10 @@ export default function App() {
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
-  
-  // Chart Configuration
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
-  const [chartHeight, setChartHeight] = useState(250); // Dynamic Height State
-  
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
+  const [isChartExpanded, setIsChartExpanded] = useState(false);
   
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
@@ -247,7 +246,7 @@ export default function App() {
         target: 0, 
         delta: 0,
         hasPrev: false,
-        inTunnel: true
+        inTunnel: true 
       };
     });
 
@@ -453,54 +452,18 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  // --- DRAG LOGIC ---
-  const isDraggingRef = useRef(false);
-  const startYRef = useRef(0);
-  const startHeightRef = useRef(0);
-
-  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
-    isDraggingRef.current = true;
-    startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    startHeightRef.current = chartHeight;
-    
-    document.body.style.userSelect = 'none'; // Prevent text selection
-    window.addEventListener('mousemove', handleDragMove);
-    window.addEventListener('mouseup', handleDragEnd);
-    window.addEventListener('touchmove', handleDragMove, { passive: false });
-    window.addEventListener('touchend', handleDragEnd);
-  };
-
-  const handleDragMove = (e: MouseEvent | TouchEvent) => {
-    if (!isDraggingRef.current) return;
-    
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const delta = clientY - startYRef.current;
-    
-    // Limit height between 200px and 600px
-    const newHeight = Math.max(200, Math.min(600, startHeightRef.current + delta));
-    setChartHeight(newHeight);
-  };
-
-  const handleDragEnd = () => {
-    isDraggingRef.current = false;
-    document.body.style.userSelect = '';
-    window.removeEventListener('mousemove', handleDragMove);
-    window.removeEventListener('mouseup', handleDragEnd);
-    window.removeEventListener('touchmove', handleDragMove);
-    window.removeEventListener('touchend', handleDragEnd);
-  };
-
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number }) => {
+  const ChartRenderer = ({ data, mode, expanded }: { data: ChartPoint[], mode: 'weekly' | 'daily', expanded: boolean }) => {
     if (!data || data.length < 2) return (
-      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
+      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800 h-[250px]">
         <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
+    const height = expanded ? 450 : 250;
     const width = 600; 
-    const padding = 40; // More padding for y-axis labels
-    const marginBottom = 20; 
+    const padding = expanded ? 50 : 30;
+    const marginBottom = 30; 
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -529,35 +492,41 @@ export default function App() {
         const x = getX(i);
         const y = getY(d.trend);
         if (lastValidT === -1) trendPath += `M ${x},${y} `;
-        else trendPath += `L ${x},${y} `; 
+        else {
+            const distance = i - lastValidT;
+            // Only break trend line on huge gaps
+            if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
+            else trendPath += `L ${x},${y} `; 
+        }
         lastValidT = i;
     });
 
-    // Calculate intervals based on density
-    const labelInterval = Math.ceil(data.length / (width / 60)); 
+    const labelInterval = Math.ceil(data.length / (expanded ? 10 : 6));
 
     return (
-      <div className="w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none" style={{height: height}}>
+      <div className="w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none transition-all duration-300 ease-in-out" style={{height: height}}>
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full" preserveAspectRatio="none">
           {/* Grid */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Y-Axis Labels (Dynamic) */}
-          <text x={padding - 8} y={getY(minVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
-          <text x={padding - 8} y={getY(maxVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
-          
+          {/* Y-Axis Labels (Expanded Only) */}
+          {expanded && (
+              <>
+                <text x={padding - 10} y={getY(minVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
+                <text x={padding - 10} y={getY(maxVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
+              </>
+          )}
+
           {/* Tunnel */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
           {/* Trend Line */}
-          <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth={expanded ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
 
           {/* Data Dots */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             
-             // RED DOT LOGIC: Dot is red if the TREND is out of bounds at this point
              const isTrendOff = d.trend ? (d.trend > d.targetUpper || d.trend < d.targetLower) : false;
              
              return (
@@ -565,10 +534,15 @@ export default function App() {
                     <circle 
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
-                        r={2.5} 
+                        r={expanded ? 3 : 2.5} 
                         fill={isTrendOff ? "#ef4444" : "#94a3b8"} 
                         opacity={isTrendOff ? "0.9" : "0.4"}
                     />
+                    {expanded && (
+                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
+                            {d.actual.toFixed(1)}
+                        </text>
+                    )}
                 </g>
              );
           })}
@@ -657,6 +631,10 @@ export default function App() {
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
+                                {/* Expand Toggle Icon */}
+                                <button onClick={() => setIsChartExpanded(!isChartExpanded)} className="text-blue-400 hover:text-blue-300 transition-colors">
+                                    {isChartExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                                </button>
                             </div>
                             <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
@@ -676,16 +654,15 @@ export default function App() {
                     </div>
 
                     {/* Expandable Chart Container */}
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
+                    <ChartRenderer data={finalChartData} mode={chartMode} expanded={isChartExpanded}/>
                     
-                    {/* Drag Handle */}
-                    <div 
-                        className="h-6 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors touch-none"
-                        onMouseDown={handleDragStart}
-                        onTouchStart={handleDragStart}
+                    {/* Toggle Bar */}
+                    <button 
+                        onClick={() => setIsChartExpanded(!isChartExpanded)}
+                        className="h-6 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-center hover:bg-slate-800 transition-colors w-full"
                     >
                         <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
-                    </div>
+                    </button>
                 </section>
 
                 <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
