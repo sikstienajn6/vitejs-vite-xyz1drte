@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
-  signInWithPopup, // Changed from signInWithRedirect
+  signInWithPopup, 
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
@@ -25,14 +25,16 @@ import {
   Plus, 
   Settings, 
   Trash2, 
-  ChevronRight, 
-  ChevronDown,
+  ChevronDown, 
+  ChevronRight,
   Activity,
   Calendar,
   Target,
   Clock,
   LogOut,
-  LogIn
+  LogIn,
+  AlertCircle,
+  BarChart2
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -45,11 +47,15 @@ const firebaseConfig = {
   appId: "1:895893600072:web:e329aba69602d46fa8e57d",
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
+
+// --- LOGIC CONSTANTS ---
+const TUNNEL_TOLERANCE = 0.3; 
+const RATE_TOLERANCE_GREEN = 0.1;
+const RATE_TOLERANCE_ORANGE = 0.25;
 
 // --- Types ---
 interface WeightEntry {
@@ -71,8 +77,11 @@ interface WeeklySummary {
   count: number;
   entries: WeightEntry[];
   target: number;
+  targetUpper: number; 
+  targetLower: number; 
   delta: number;
   hasPrev: boolean;
+  inTunnel: boolean; 
 }
 
 // --- Helper Functions ---
@@ -92,7 +101,6 @@ const formatDate = (dateString: string) => {
 };
 
 // --- Main Component ---
-
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [weights, setWeights] = useState<WeightEntry[]>([]);
@@ -101,24 +109,22 @@ export default function App() {
   
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
-  const [view, setView] = useState('dashboard'); 
+  const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
+  const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
 
   // --- AUTH HANDLING ---
   useEffect(() => {
-    // Standard Auth Listener
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
     });
-
     return () => unsubscribe();
   }, []);
 
   const handleGoogleLogin = async () => {
     try {
-      // Switched to signInWithPopup to avoid redirect/cookie issues
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
       console.error("Login initiation failed:", error);
@@ -138,7 +144,6 @@ export default function App() {
       return;
     }
 
-    // 1. Fetch Weights
     // @ts-ignore
     const qWeights = query(collection(db, 'users', user.uid, 'weights'), orderBy('date', 'desc'));
     const unsubWeights = onSnapshot(qWeights, (snapshot) => {
@@ -146,7 +151,6 @@ export default function App() {
       setWeights(data);
     }, (err) => console.error("Weight fetch error:", err));
 
-    // 2. Fetch Settings
     // @ts-ignore
     const docRef = doc(db, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(docRef, (snapshot) => {
@@ -156,7 +160,7 @@ export default function App() {
         setWeeklyRate(s.weeklyRate ? s.weeklyRate.toString() : '0.0');
       } else {
         setSettings(null);
-        setView('settings'); // Force settings view if no config exists
+        setView('settings'); 
       }
     }, (err) => console.error("Settings fetch error:", err));
 
@@ -177,56 +181,86 @@ export default function App() {
       groups[weekKey].push(entry);
     });
 
-    let processed = Object.keys(groups).sort().map((weekKey) => {
+    let processedRaw = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
       const avg = valSum / entries.length;
       const earliestDate = entries[entries.length - 1].date; 
-
-      return {
-        weekId: weekKey,
-        weekLabel: formatDate(earliestDate),
-        actual: avg,
-        count: entries.length,
-        entries: entries,
-        target: 0, 
-        delta: 0,
-        hasPrev: false
-      };
+      return { weekKey, avg, earliestDate, entries };
     });
 
-    if (processed.length > 0) {
-      const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-      
-      for (let i = 0; i < processed.length; i++) {
-        if (i === 0) {
-            processed[i].target = processed[i].actual;
-            processed[i].delta = 0;
-            processed[i].hasPrev = false;
-        } else {
-            const prevActual = processed[i-1].actual;
-            processed[i].target = prevActual + rate;
-            processed[i].delta = processed[i].actual - prevActual;
-            processed[i].hasPrev = true;
+    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+    const result: WeeklySummary[] = [];
+
+    for (let i = 0; i < processedRaw.length; i++) {
+        const current = processedRaw[i];
+        const prevData = i > 0 ? result[i-1] : null;
+        
+        let target = current.avg;
+
+        if (prevData) {
+            const distFromPrevTarget = Math.abs(prevData.actual - prevData.target);
+            const wasSafe = distFromPrevTarget <= TUNNEL_TOLERANCE;
+            if (wasSafe) {
+                target = prevData.target + rate;
+            } else {
+                target = prevData.actual + rate;
+            }
         }
-      }
+
+        result.push({
+            weekId: current.weekKey,
+            weekLabel: formatDate(current.earliestDate),
+            actual: current.avg,
+            count: current.entries.length,
+            entries: current.entries,
+            target: target,
+            targetUpper: target + TUNNEL_TOLERANCE,
+            targetLower: target - TUNNEL_TOLERANCE,
+            delta: prevData ? current.avg - prevData.actual : 0,
+            hasPrev: !!prevData,
+            inTunnel: Math.abs(current.avg - target) <= TUNNEL_TOLERANCE
+        });
     }
 
-    return processed;
+    return result;
   }, [weights, settings]);
 
   const currentWeeklyDiff = useMemo(() => {
     if (weeklyData.length < 2) return 0;
     const last = weeklyData[weeklyData.length - 1];
-    const prev = weeklyData[weeklyData.length - 2];
-    return last.actual - prev.actual;
+    return last.delta;
   }, [weeklyData]);
+
+  // --- DAILY CHART DATA PREP ---
+  const dailyChartData = useMemo(() => {
+    if (chartMode !== 'daily') return [];
+    // Create a map of WeekKey -> Target Info for quick lookup
+    const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
+    
+    // Clone and sort weights ascending for chart
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+
+    return sortedWeights.map(entry => {
+        const wKey = getWeekKey(entry.date);
+        const parentWeek = weekMap.get(wKey);
+        // If we can't find the week (rare), fallback to entry weight
+        const target = parentWeek ? parentWeek.target : entry.weight;
+        return {
+            label: formatDate(entry.date),
+            actual: entry.weight,
+            target: target,
+            targetUpper: parentWeek ? parentWeek.targetUpper : target + TUNNEL_TOLERANCE,
+            targetLower: parentWeek ? parentWeek.targetLower : target - TUNNEL_TOLERANCE,
+        };
+    });
+  }, [weights, weeklyData, chartMode]);
+
 
   // --- ACTIONS ---
   const handleAddWeight = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!weightInput || !user) return;
-    
     try {
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
@@ -237,14 +271,13 @@ export default function App() {
       setWeightInput('');
     } catch (err) {
       console.error("Error adding weight:", err);
-      alert("Error saving. Check console.");
+      alert("Error saving.");
     }
   };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-
     try {
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
@@ -270,113 +303,140 @@ export default function App() {
 
   const toggleWeek = (weekId: string) => {
     setExpandedWeeks(prev => 
-      prev.includes(weekId) 
-        ? prev.filter(id => id !== weekId) 
-        : [...prev, weekId]
+      prev.includes(weekId) ? prev.filter(id => id !== weekId) : [...prev, weekId]
     );
   };
 
-  const getDeltaColor = (delta: number) => {
-    const rate = parseFloat(settings?.weeklyRate.toString() || '0');
-    const isBulking = rate >= 0;
-    
-    if (delta === 0) return 'text-slate-500';
-    
-    if (isBulking) {
-        return delta > 0 ? 'text-emerald-400' : 'text-rose-400';
-    } else {
-        return delta < 0 ? 'text-emerald-400' : 'text-rose-400';
-    }
+  const getRateAdherenceColor = (actualDelta: number) => {
+    if (!settings) return 'text-slate-500';
+    const targetRate = settings.weeklyRate;
+    const deviation = Math.abs(actualDelta - targetRate);
+    if (deviation <= RATE_TOLERANCE_GREEN) return 'text-emerald-400';
+    if (deviation <= RATE_TOLERANCE_ORANGE) return 'text-amber-400';
+    return 'text-rose-400'; 
   };
 
   // --- CHART COMPONENT ---
-  const SimpleChart = ({ data }: { data: any[] }) => {
+  const ChartRenderer = ({ data, mode }: { data: any[], mode: 'weekly' | 'daily' }) => {
     if (!data || data.length < 2) return (
       <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
-        <p className="text-sm">Log data for 2+ weeks to see trend</p>
+        <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
-    const height = 200;
+    const height = 220;
     const width = 600; 
     const padding = 30;
     const marginBottom = 20; 
 
-    const allValues = data.flatMap(d => [d.actual, d.target]);
-    const minVal = Math.min(...allValues) - 0.5;
-    const maxVal = Math.max(...allValues) + 0.5;
+    const allValues = data.flatMap(d => [d.actual, d.targetUpper, d.targetLower]);
+    const minVal = Math.min(...allValues) - 0.2;
+    const maxVal = Math.max(...allValues) + 0.2;
     const range = maxVal - minVal || 1;
 
     const getX = (i: number) => padding + (i / (data.length - 1)) * (width - 2 * padding);
     const getY = (val: number) => (height - marginBottom) - padding - ((val - minVal) / range) * ((height - marginBottom) - 2 * padding);
 
+    // Determine Display Interval for labels (prevent overcrowding on Daily view)
+    const labelInterval = mode === 'daily' ? Math.ceil(data.length / 6) : 1;
+
     const actualPath = data.map((d, i) => `${getX(i)},${getY(d.actual)}`).join(' ');
     const targetPath = data.map((d, i) => `${getX(i)},${getY(d.target)}`).join(' ');
+    
+    const areaPoints = [
+        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
+        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
+    ].join(' ');
 
     return (
       <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+          <defs>
+            <linearGradient id="gridGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#1e293b" stopOpacity="0.5" />
+                <stop offset="100%" stopColor="#1e293b" stopOpacity="0.1" />
+            </linearGradient>
+          </defs>
+
+          {/* Guidelines */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {minVal < 0 && maxVal > 0 && (
-             <line x1={padding} y1={getY(0)} x2={width-padding} y2={getY(0)} stroke="#475569" strokeWidth="1" strokeDasharray="2,2" />
-          )}
+          {/* Green Zone Tunnel */}
+          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
+          {/* Target Center Line */}
+          <polyline points={targetPath} fill="none" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1" strokeDasharray="4,4" />
+          
+          {/* Actual Data Line */}
+          <polyline 
+            points={actualPath} 
+            fill="none" 
+            stroke="#3b82f6" 
+            strokeWidth={mode === 'daily' ? "1.5" : "3"} 
+            strokeLinecap="round" 
+            strokeLinejoin="round" 
+            opacity={mode === 'daily' ? "0.6" : "1"}
+          />
 
-          <polyline points={targetPath} fill="none" stroke="#475569" strokeWidth="2" strokeDasharray="5,5" />
-          <polyline points={actualPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          {/* Data Points */}
+          {data.map((d, i) => {
+             const isOffTrack = Math.abs(d.actual - d.target) > TUNNEL_TOLERANCE;
+             // On daily view, make dots smaller
+             const r = mode === 'daily' ? (isOffTrack ? 2.5 : 2) : (isOffTrack ? 3 : 4);
+             
+             return (
+                <circle 
+                    key={i} 
+                    cx={getX(i)} 
+                    cy={getY(d.actual)} 
+                    r={r} 
+                    fill={isOffTrack ? "#ef4444" : "#3b82f6"} 
+                    stroke={mode === 'daily' ? 'none' : (isOffTrack ? "#ef4444" : "#0f172a")}
+                    strokeWidth="2" 
+                />
+             );
+          })}
 
-          {data.map((d, i) => (
-            <circle key={i} cx={getX(i)} cy={getY(d.actual)} r="4" fill="#0f172a" stroke="#3b82f6" strokeWidth="2" />
-          ))}
-
-          <text x={padding} y={height - 5} fontSize="14" fill="#64748b" textAnchor="start">
-            {data[0]?.weekLabel}
-          </text>
-          <text x={width - padding} y={height - 5} fontSize="14" fill="#64748b" textAnchor="end">
-            {data[data.length - 1]?.weekLabel}
-          </text>
+          {/* Labels */}
+          {data.map((d, i) => {
+             if (i % labelInterval !== 0 && i !== data.length - 1) return null;
+             return (
+                <text key={i} x={getX(i)} y={height - 5} fontSize="10" fill="#64748b" textAnchor="middle">
+                    {mode === 'weekly' ? d.weekLabel : d.label}
+                </text>
+             );
+          })}
         </svg>
       </div>
     );
   };
 
   // --- RENDER LOADING ---
-  if (loading) return <div className="h-screen w-screen flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
+  if (loading) return <div className="h-screen w-full flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
-  // --- RENDER LOGIN SCREEN ---
+  // --- RENDER LOGIN ---
   if (!user) return (
-    <div className="min-h-screen w-screen bg-slate-950 grid place-items-center p-6">
-        <div className="max-w-xs text-center">
+    <div className="min-h-screen w-full bg-slate-950 grid place-items-center p-6 overflow-x-hidden">
+        <div className="max-w-xs text-center w-full">
             <Activity size={48} className="text-blue-500 mx-auto mb-4" />
             <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
             <p className="text-slate-400">Track your progress securely.</p>
-        
             <div className="mt-8">
-                <button 
-                    onClick={handleGoogleLogin}
-                    className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full justify-center"
-                >
-                    <LogIn size={20} />
-                    Sign in with Google
+                <button onClick={handleGoogleLogin} className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full justify-center">
+                    <LogIn size={20} /> Sign in with Google
                 </button>
             </div>
-            <p className="text-xs text-slate-600 mt-8">
-                Your data is stored securely in the cloud.
-            </p>
         </div>
     </div>
   );
 
-  // --- RENDER DASHBOARD ---
+  // --- RENDER APP ---
   return (
-    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20">
+    <div className="min-h-screen w-full bg-slate-950 text-slate-100 font-sans pb-20 overflow-x-hidden">
       
-      {/* Dark Header */}
+      {/* Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
-        <div className="flex items-center gap-2 text-blue-500">
-          {/* Logo area */}
-        </div>
+        <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
         <div className="flex gap-2">
             <button onClick={() => setView('settings')} className="p-2 hover:bg-slate-800 rounded-full transition-colors">
                 <Settings size={20} className="text-slate-400" />
@@ -387,9 +447,10 @@ export default function App() {
         </div>
       </div>
 
-      {/* MAIN CONTENT AREA */}
+      {/* Content Container */}
       <div className="max-w-md mx-auto p-4 space-y-5">
         
+        {/* --- DASHBOARD VIEW --- */}
         {view === 'dashboard' && (
           <>
             <div className="grid grid-cols-2 gap-3">
@@ -401,8 +462,8 @@ export default function App() {
                 </p>
               </div>
               <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week</p>
-                <div className={`flex items-center gap-1 text-lg font-bold truncate ${getDeltaColor(currentWeeklyDiff)}`}>
+                <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week Rate</p>
+                <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentWeeklyDiff)}`}>
                   {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
                   {Math.abs(currentWeeklyDiff).toFixed(2)} kg
                 </div>
@@ -412,21 +473,39 @@ export default function App() {
             {settings && weeklyData.length > 0 && (
                <div className="bg-slate-800 text-white px-4 py-3 rounded-xl flex flex-wrap justify-between items-center text-sm shadow-sm gap-2 border border-slate-700">
                   <div className="flex items-center gap-2">
-                     <Target size={16} className="text-blue-400 shrink-0" />
-                     <span>Rate: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
+                     <Target size={16} className="text-emerald-400 shrink-0" />
+                     <span>Goal: <span className="font-bold">{settings.weeklyRate > 0 ? '+' : ''}{settings.weeklyRate} kg/wk</span></span>
                   </div>
-                  <span className="text-slate-400 whitespace-nowrap">Target: {weeklyData[weeklyData.length-1].target.toFixed(1)} kg</span>
-               </div>
-            )}
-            {settings && weeklyData.length === 0 && (
-               <div className="bg-blue-900/20 text-blue-300 border border-blue-900/50 px-4 py-3 rounded-xl text-sm shadow-sm text-center">
-                 Start logging weights to initialize your trendline.
                </div>
             )}
 
             <section>
-              <h2 className="text-sm font-semibold text-slate-300 mb-2 ml-1">Trend Adherence</h2>
-              <SimpleChart data={weeklyData} />
+              <div className="flex justify-between items-end mb-3 px-1">
+                <div>
+                    <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
+                    <p className="text-xs font-normal text-slate-500">Tunnel: ±{TUNNEL_TOLERANCE}kg</p>
+                </div>
+                
+                <div className="bg-slate-800 p-1 rounded-lg flex text-xs font-bold">
+                    <button 
+                        onClick={() => setChartMode('weekly')}
+                        className={`px-3 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Weekly
+                    </button>
+                    <button 
+                        onClick={() => setChartMode('daily')}
+                        className={`px-3 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Daily
+                    </button>
+                </div>
+              </div>
+              
+              <ChartRenderer 
+                data={chartMode === 'weekly' ? weeklyData : dailyChartData} 
+                mode={chartMode}
+              />
             </section>
 
             <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
@@ -436,92 +515,58 @@ export default function App() {
               <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
                 <div className="flex gap-2">
                     <input 
-                    type="number" 
-                    step="0.01" 
-                    placeholder="0.0"
+                    type="number" step="0.01" placeholder="0.0" required
                     className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl"
-                    value={weightInput}
-                    onChange={(e) => setWeightInput(e.target.value)}
-                    required
+                    value={weightInput} onChange={(e) => setWeightInput(e.target.value)}
                     />
-                    <button 
-                    type="submit"
-                    className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg"
-                    >
-                    Add
-                    </button>
+                    <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
                 </div>
                 <div className="relative">
-                     <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none">
-                        <Clock size={16} />
-                     </div>
-                     <input 
-                        type="date" 
-                        className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer"
-                        value={dateInput}
-                        onChange={(e) => setDateInput(e.target.value)}
-                        aria-label="Select date"
-                    />
+                     <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
+                     <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
                 </div>
               </form>
             </div>
 
             <section>
-              <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">Weekly Breakdown</h2>
-              
+              <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
               <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
                 <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
                   <div>Week</div>
                   <div className="text-right">Avg</div>
-                  <div className="text-right">Diff</div>
+                  <div className="text-right">Rate</div>
                   <div className="w-5"></div>
                 </div>
-
                 <div className="divide-y divide-slate-800">
                   {weeklyData.slice().reverse().map((item) => {
                     const isExpanded = expandedWeeks.includes(item.weekId);
+                    const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
                     return (
                       <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
-                        <div 
-                          className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer"
-                          onClick={() => toggleWeek(item.weekId)}
-                        >
+                        <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
                           <div className="flex flex-col">
                              <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
                              <span className="text-[10px] text-slate-500">{item.count} entries</span>
                           </div>
-                          
-                          <div className="text-right font-bold text-slate-200">
-                            {item.actual.toFixed(1)}
+                          <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
+                          <div className={`text-right font-bold text-xs ${rateColor}`}>
+                            {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
                           </div>
-                          
-                          <div className={`text-right font-bold text-xs ${!item.hasPrev ? 'text-slate-600' : getDeltaColor(item.delta)}`}>
-                            {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(1)}` : item.delta.toFixed(1)) : '-'}
-                          </div>
-
-                          <div className="flex justify-end text-slate-500">
-                             <ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-                          </div>
+                          <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
                         </div>
-
                         {isExpanded && (
                           <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                            <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Daily Entries</p>
+                            <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
+                                <span>Daily Entries</span>
+                                <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Road: On Track' : 'Road: Deviated'}</span>
+                            </div>
                             <div className="space-y-2">
                               {item.entries.map((entry) => (
                                 <div key={entry.id} className="flex justify-between items-center text-sm">
-                                  <div className="flex items-center gap-2 text-slate-500">
-                                    <Calendar size={12} />
-                                    <span>{formatDate(entry.date)}</span>
-                                  </div>
+                                  <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
                                   <div className="flex items-center gap-3">
                                      <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                                     <button 
-                                        onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }}
-                                        className="text-slate-600 hover:text-red-400"
-                                     >
-                                        <Trash2 size={12} />
-                                     </button>
+                                     <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
                                   </div>
                                 </div>
                               ))}
@@ -531,19 +576,13 @@ export default function App() {
                       </div>
                     );
                   })}
-                  
-                  {weeklyData.length === 0 && (
-                    <div className="p-6 text-center text-slate-500 text-sm">
-                      No data recorded yet.
-                    </div>
-                  )}
                 </div>
               </div>
             </section>
           </>
         )}
 
-        {/* SETTINGS SCREEN (Fixed to full screen width) */}
+        {/* --- SETTINGS VIEW --- */}
         {view === 'settings' && (
            <div className="space-y-4 w-full">
             <div className="flex items-center gap-2 mb-4">
@@ -552,26 +591,16 @@ export default function App() {
                 </button>
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
-
-             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full block">
+             <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-5 w-full">
                 <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Desired Weekly Rate (kg/week)</label>
-                    <div className="relative">
-                        <input 
-                            type="number" step="0.01" required 
-                            value={weeklyRate} onChange={(e) => setWeeklyRate(e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"
-                            placeholder="e.g. 0.5 or -0.5"
-                        />
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Target Weekly Rate (kg/week)</label>
+                    <input type="number" step="0.01" required value={weeklyRate} onChange={(e) => setWeeklyRate(e.target.value)} className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500"/>
+                    <div className="mt-3 text-xs text-slate-400 flex items-start gap-2">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                        <p>Positive (0.5) for gaining, Negative (-0.5) for losing.<br/>The Chart tunnel is ±{TUNNEL_TOLERANCE}kg to account for water weight.</p>
                     </div>
-                    <p className="text-xs text-slate-500 mt-2">Use positive (0.5) for bulk, negative (-0.5) for cut.</p>
                 </div>
-
-                <div className="pt-4">
-                    <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
-                        Save Plan
-                    </button>
-                </div>
+                <div className="pt-4"><button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">Save Plan</button></div>
              </form>
            </div>
         )}
