@@ -624,13 +624,13 @@ export default function App() {
           {/* X-Axis Labels (Only drawn if inside visible area) */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
-             // Inset labels slightly if they are on the very edge
-             let anchor = "middle";
+             
+             // FIX: Explicitly type the anchor variable to satisfy TS
+             let anchor: "start" | "middle" | "end" = "middle";
+             
              if (i === 0) anchor = "start";
              if (i === data.length - 1) anchor = "end";
              
-             // Adjust X for padding if needed, but since we want full width, text might clip if not careful.
-             // We use a small offset for start/end.
              let xPos = getX(i);
              if (i === 0) xPos += 4;
              if (i === data.length - 1) xPos -= 4;
