@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -32,9 +32,7 @@ import {
   Clock,
   LogOut,
   LogIn,
-  AlertCircle,
-  Maximize2,
-  Minimize2
+  AlertCircle
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -129,11 +127,13 @@ export default function App() {
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
+  
+  // Chart State
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
-  const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
-  const [isChartExpanded, setIsChartExpanded] = useState(false);
+  const [chartHeight, setChartHeight] = useState(250); // Dynamic height
   
+  const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87'); 
@@ -452,18 +452,54 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
+  // --- DRAG LOGIC ---
+  const isDraggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    isDraggingRef.current = true;
+    startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    startHeightRef.current = chartHeight;
+    
+    document.body.style.userSelect = 'none'; // Prevent text selection
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    window.addEventListener('touchmove', handleDragMove, { passive: false });
+    window.addEventListener('touchend', handleDragEnd);
+  };
+
+  const handleDragMove = (e: MouseEvent | TouchEvent) => {
+    if (!isDraggingRef.current) return;
+    
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const delta = clientY - startYRef.current;
+    
+    // Smoothly follow finger between 200px and 500px
+    const newHeight = Math.max(200, Math.min(500, startHeightRef.current + delta));
+    setChartHeight(newHeight);
+  };
+
+  const handleDragEnd = () => {
+    isDraggingRef.current = false;
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', handleDragMove);
+    window.removeEventListener('mouseup', handleDragEnd);
+    window.removeEventListener('touchmove', handleDragMove);
+    window.removeEventListener('touchend', handleDragEnd);
+  };
+
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, expanded }: { data: ChartPoint[], mode: 'weekly' | 'daily', expanded: boolean }) => {
+  const ChartRenderer = ({ data, mode, height }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number }) => {
     if (!data || data.length < 2) return (
-      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800 h-[250px]">
+      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
-    const height = expanded ? 450 : 250;
     const width = 600; 
-    const padding = expanded ? 50 : 30;
-    const marginBottom = 30; 
+    const padding = 40; 
+    const marginBottom = 20; 
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -485,64 +521,81 @@ export default function App() {
         ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
     ].join(' ');
 
-    let trendPath = '';
     let lastValidT = -1;
-    data.forEach((d, i) => {
-        if (d.trend === null) return;
-        const x = getX(i);
-        const y = getY(d.trend);
-        if (lastValidT === -1) trendPath += `M ${x},${y} `;
-        else {
-            const distance = i - lastValidT;
-            // Only break trend line on huge gaps
-            if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
-            else trendPath += `L ${x},${y} `; 
+    const trendSegments = [];
+
+    // Create Segments for Trend Line (Blue inside, Red outside)
+    for(let i = 0; i < data.length; i++) {
+        if (data[i].trend === null) continue;
+        
+        if (lastValidT !== -1) {
+            // Determine segment color
+            // If BOTH start and end points are inside -> Blue
+            // If ANY is outside -> Red (Strict warning)
+            const prev = data[lastValidT];
+            const curr = data[i];
+            
+            const prevOff = prev.trend! > prev.targetUpper || prev.trend! < prev.targetLower;
+            const currOff = curr.trend! > curr.targetUpper || curr.trend! < curr.targetLower;
+            
+            const color = (prevOff || currOff) ? '#ef4444' : '#3b82f6';
+            const gap = i - lastValidT > BREAK_LINE_THRESHOLD_DAYS;
+
+            if (!gap) {
+                trendSegments.push(
+                    <line 
+                        key={`seg-${i}`}
+                        x1={getX(lastValidT)} 
+                        y1={getY(prev.trend!)} 
+                        x2={getX(i)} 
+                        y2={getY(curr.trend!)} 
+                        stroke={color} 
+                        strokeWidth="2.5" 
+                        strokeLinecap="round"
+                    />
+                );
+            }
         }
         lastValidT = i;
-    });
+    }
 
-    const labelInterval = Math.ceil(data.length / (expanded ? 10 : 6));
+    // Dynamic interval for labels
+    const labelInterval = Math.ceil(data.length / (width / 60)); 
 
     return (
-      <div className="w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none transition-all duration-300 ease-in-out" style={{height: height}}>
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full" preserveAspectRatio="none">
+      <div className="w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none" style={{height: height}}>
+        {/* IMPORTANT: Removed preserveAspectRatio to fix oval dots/stretched text */}
+        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`}>
           {/* Grid */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Y-Axis Labels (Expanded Only) */}
-          {expanded && (
-              <>
-                <text x={padding - 10} y={getY(minVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
-                <text x={padding - 10} y={getY(maxVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
-              </>
-          )}
-
+          {/* Y-Axis Labels */}
+          <text x={padding - 8} y={getY(minVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
+          <text x={padding - 8} y={getY(maxVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
+          
           {/* Tunnel */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
-          {/* Trend Line */}
-          <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth={expanded ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
+          {/* Trend Line (Segments) */}
+          {trendSegments}
 
           {/* Data Dots */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             const isTrendOff = d.trend ? (d.trend > d.targetUpper || d.trend < d.targetLower) : false;
+             
+             // DOT LOGIC: Red if THIS DOT is outside tunnel. 
+             const isDotOff = d.actual > d.targetUpper || d.actual < d.targetLower;
              
              return (
                 <g key={i}>
                     <circle 
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
-                        r={expanded ? 3 : 2.5} 
-                        fill={isTrendOff ? "#ef4444" : "#94a3b8"} 
-                        opacity={isTrendOff ? "0.9" : "0.4"}
+                        r={2.5} 
+                        fill={isDotOff ? "#ef4444" : "#94a3b8"} 
+                        opacity={isDotOff ? "0.9" : "0.4"}
                     />
-                    {expanded && (
-                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
-                            {d.actual.toFixed(1)}
-                        </text>
-                    )}
                 </g>
              );
           })}
@@ -631,10 +684,6 @@ export default function App() {
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                                {/* Expand Toggle Icon */}
-                                <button onClick={() => setIsChartExpanded(!isChartExpanded)} className="text-blue-400 hover:text-blue-300 transition-colors">
-                                    {isChartExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                                </button>
                             </div>
                             <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
@@ -653,16 +702,17 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* Expandable Chart Container */}
-                    <ChartRenderer data={finalChartData} mode={chartMode} expanded={isChartExpanded}/>
+                    {/* Chart Container */}
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
                     
-                    {/* Toggle Bar */}
-                    <button 
-                        onClick={() => setIsChartExpanded(!isChartExpanded)}
-                        className="h-6 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-center hover:bg-slate-800 transition-colors w-full"
+                    {/* Drag Handle */}
+                    <div 
+                        className="h-6 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors touch-none"
+                        onMouseDown={handleDragStart}
+                        onTouchStart={handleDragStart}
                     >
                         <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
-                    </button>
+                    </div>
                 </section>
 
                 <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
