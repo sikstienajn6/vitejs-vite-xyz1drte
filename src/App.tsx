@@ -526,10 +526,8 @@ export default function App() {
     const width = 600; 
     const expanded = height > SNAP_THRESHOLD;
     
-    // EXTREME FILL MARGINS:
-    // Top: 5px (bare minimum)
-    // Bottom: 15px (just enough for text)
-    const padding = { top: 0, bottom: 0, left: expanded ? 40 : 30, right: 20 };
+    // MARGINS: Minimized to fill box. Padding bottom increased slightly for text
+    const padding = { top: 10, bottom: 24, left: expanded ? 40 : 30, right: 20 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -539,11 +537,11 @@ export default function App() {
         return vals;
     });
     
-    // 5% Buffer
+    // Tight 1% buffer for max vertical filling
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
-    const buffer = rawRange * 0.05; 
+    const buffer = rawRange * 0.01; 
     
     const minVal = rawMin - buffer;
     const maxVal = rawMax + buffer;
@@ -589,8 +587,8 @@ export default function App() {
           {/* Y-Axis Labels */}
           {expanded && (
               <>
-                <text x={padding.left - 8} y={getY(minVal) - 4} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
-                <text x={padding.left - 8} y={getY(maxVal) + 4} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
+                <text x={padding.left - 8} y={getY(minVal) - 6} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
+                <text x={padding.left - 8} y={getY(maxVal) + 6} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
               </>
           )}
 
@@ -613,6 +611,7 @@ export default function App() {
           {/* Data Dots */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
+             // RAW CHECK: Is THIS reading inside the tunnel?
              const isDotOff = d.actual > d.targetUpper || d.actual < d.targetLower;
              
              return (
@@ -621,11 +620,11 @@ export default function App() {
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
                         r={expanded ? 3 : 2.5} 
-                        fill="#94a3b8" 
+                        fill={isDotOff ? "#ef4444" : "#94a3b8"} 
                         opacity={isDotOff ? "0.9" : "0.4"}
                     />
                     {expanded && (
-                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="12" fill="#cbd5e1" textAnchor="middle">
+                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
                             {d.actual.toFixed(1)}
                         </text>
                     )}
@@ -637,7 +636,7 @@ export default function App() {
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
-                <text key={i} x={getX(i)} y={height - 5} fontSize="12" fill="#64748b" textAnchor="middle">
+                <text key={i} x={getX(i)} y={height - 6} fontSize="10" fill="#64748b" textAnchor="middle">
                     {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                 </text>
              );
@@ -739,7 +738,7 @@ export default function App() {
                     <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
                     
                     {/* Drag Handle / Grip Area */}
-                    <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2">
+                    <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2" style={{ touchAction: 'none' }}>
                         
                         {/* Legend */}
                         <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
@@ -760,7 +759,8 @@ export default function App() {
 
                         {/* Handle */}
                         <div 
-                            className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg touch-none"
+                            className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg"
+                            style={{ touchAction: 'none' }} // KEY FIX for scrolling issues
                             onMouseDown={handleDragStart}
                             onTouchStart={handleDragStart}
                             onClick={toggleExpand}
