@@ -34,7 +34,6 @@ import {
   LogOut,
   LogIn,
   AlertCircle,
-  BarChart2
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
