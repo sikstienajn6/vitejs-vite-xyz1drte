@@ -54,6 +54,7 @@ const googleProvider = new GoogleAuthProvider();
 const TUNNEL_TOLERANCE = 0.3; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
+const BREAK_LINE_THRESHOLD_DAYS = 7; 
 
 // --- Types ---
 interface WeightEntry {
@@ -83,13 +84,12 @@ interface WeeklySummary {
 }
 
 interface ChartPoint {
-    label: string;
-    actual: number | null; // Null means gap
-    target: number | null;
-    targetUpper: number | null;
-    targetLower: number | null;
-    isGap?: boolean;
-    weekLabel?: string; // For weekly view
+    label: string; 
+    actual: number | null; 
+    target: number;
+    targetUpper: number;
+    targetLower: number;
+    weekLabel?: string;
 }
 
 // --- Helper Functions ---
@@ -106,6 +106,14 @@ const formatDate = (dateString: string) => {
   if (!dateString) return '';
   const d = new Date(dateString);
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+
+const getDaysArray = (start: Date, end: Date) => {
+    const arr = [];
+    for(let dt=new Date(start); dt<=end; dt.setDate(dt.getDate()+1)){
+        arr.push(new Date(dt).toISOString().split('T')[0]);
+    }
+    return arr;
 };
 
 // --- Main Component ---
@@ -127,7 +135,7 @@ export default function App() {
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87'); 
 
-  // --- AUTH HANDLING ---
+  // --- AUTH ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -256,23 +264,27 @@ export default function App() {
   const finalChartData = useMemo<ChartPoint[]>(() => {
     if (weeklyData.length === 0 || !settings) return [];
 
-    // 1. Determine Cutoff Date based on Filter
     const now = new Date();
-    let cutoffDate = new Date('2000-01-01'); // Default ALL
+    let startDate = new Date('2000-01-01'); 
+    const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
+
     if (filterRange === '1M') {
-        cutoffDate = new Date();
-        cutoffDate.setMonth(now.getMonth() - 1);
+        startDate = new Date();
+        startDate.setMonth(now.getMonth() - 1);
     } else if (filterRange === '3M') {
-        cutoffDate = new Date();
-        cutoffDate.setMonth(now.getMonth() - 3);
+        startDate = new Date();
+        startDate.setMonth(now.getMonth() - 3);
+    } else {
+        startDate = earliestDataDate;
     }
 
-    // 2. Prepare raw data
-    let rawPoints: ChartPoint[] = [];
+    if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
+    if (startDate > now) startDate = earliestDataDate;
 
+    // WEEKLY MODE
     if (chartMode === 'weekly') {
-        rawPoints = weeklyData
-            .filter(w => new Date(w.entries[0].date) >= cutoffDate)
+        return weeklyData
+            .filter(w => new Date(w.entries[0].date) >= startDate)
             .map(w => ({
                 label: w.weekId, 
                 weekLabel: w.weekLabel,
@@ -280,85 +292,42 @@ export default function App() {
                 target: w.target,
                 targetUpper: w.targetUpper,
                 targetLower: w.targetLower,
-                isGap: false
             }));
-    } else {
-        // Daily Mode
+    } 
+    
+    // DAILY MODE
+    else {
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
-        
-        const filteredWeights = weights
-            .filter(e => new Date(e.date) >= cutoffDate)
-            .sort((a, b) => a.date.localeCompare(b.date));
+        const weightMap = new Map(weights.map(w => [w.date, w.weight]));
+        const allDays = getDaysArray(startDate, now);
 
-        rawPoints = filteredWeights.map(entry => {
-            const wKey = getWeekKey(entry.date);
+        return allDays.map(dateStr => {
+            const wKey = getWeekKey(dateStr);
             const parentWeek = weekMap.get(wKey);
-            let dailyTarget = entry.weight;
             
+            let dailyTarget = 0;
+            let targetFound = false;
+
             if (parentWeek) {
-                const dayNum = new Date(entry.date).getDay(); 
+                const dayNum = new Date(dateStr).getDay(); 
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
                 const weekStartTarget = parentWeek.target - rate;
                 const dailyProgress = (dayIndex + 1) / 7;
                 dailyTarget = weekStartTarget + (rate * dailyProgress);
+                targetFound = true;
             }
 
             return {
-                label: entry.date, 
-                actual: entry.weight,
-                target: dailyTarget,
-                targetUpper: dailyTarget + TUNNEL_TOLERANCE,
-                targetLower: dailyTarget - TUNNEL_TOLERANCE,
-                isGap: false
+                label: dateStr,
+                actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
+                target: targetFound ? dailyTarget : 0,
+                targetUpper: targetFound ? dailyTarget + TUNNEL_TOLERANCE : 0,
+                targetLower: targetFound ? dailyTarget - TUNNEL_TOLERANCE : 0,
             };
-        });
+        }).filter(p => p.target !== 0); 
     }
-
-    if (rawPoints.length < 2) return rawPoints;
-
-    // 3. Inject Gaps
-    const processed: ChartPoint[] = [];
-    
-    for (let i = 0; i < rawPoints.length; i++) {
-        const current = rawPoints[i];
-        
-        if (i > 0) {
-            const prev = rawPoints[i-1];
-            
-            if (chartMode === 'daily') {
-                const currDate = new Date(current.label);
-                const prevDate = new Date(prev.label);
-                const diffTime = Math.abs(currDate.getTime() - prevDate.getTime());
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-
-                if (diffDays > 1) {
-                    processed.push({
-                        label: 'gap',
-                        actual: null,
-                        target: null,
-                        targetUpper: null,
-                        targetLower: null,
-                        isGap: true
-                    });
-                }
-            } else {
-                 const currParts = current.label.split('-W');
-                 const prevParts = prev.label.split('-W');
-                 if (currParts[0] === prevParts[0]) {
-                    const diff = parseInt(currParts[1]) - parseInt(prevParts[1]);
-                    if (diff > 1) processed.push({ ...current, actual: null, isGap: true });
-                 } else {
-                     processed.push({ ...current, actual: null, isGap: true });
-                 }
-            }
-        }
-        processed.push(current);
-    }
-
-    return processed;
   }, [weeklyData, weights, chartMode, settings, filterRange]);
-
 
   // --- ACTIONS ---
   const resetSettingsForm = () => {
@@ -373,30 +342,18 @@ export default function App() {
   };
 
   const handleNavigation = (targetView: 'dashboard' | 'settings') => {
-    if (view === 'settings' && targetView === 'dashboard') {
-        resetSettingsForm(); 
-    }
+    if (view === 'settings' && targetView === 'dashboard') resetSettingsForm();
     setView(targetView);
   };
 
   const handleRateChange = (val: string, type: 'weekly' | 'monthly') => {
     const sanitizedVal = val.replace(',', '.');
-    if (sanitizedVal === '') {
-        setWeeklyRate('');
-        setMonthlyRate('');
-        return;
-    }
-    if (sanitizedVal === '.') {
-        if (type === 'weekly') setWeeklyRate('.');
-        else setMonthlyRate('.');
-        return;
-    }
+    if (sanitizedVal === '') { setWeeklyRate(''); setMonthlyRate(''); return; }
+    if (sanitizedVal === '.') { type === 'weekly' ? setWeeklyRate('.') : setMonthlyRate('.'); return; }
+    
     const num = parseFloat(sanitizedVal);
-    if (isNaN(num)) {
-        if (type === 'weekly') setWeeklyRate(sanitizedVal);
-        else setMonthlyRate(sanitizedVal);
-        return; 
-    }
+    if (isNaN(num)) { type === 'weekly' ? setWeeklyRate(sanitizedVal) : setMonthlyRate(sanitizedVal); return; }
+
     if (type === 'weekly') {
         setWeeklyRate(sanitizedVal);
         setMonthlyRate((num * 4.345).toFixed(2));
@@ -429,11 +386,8 @@ export default function App() {
     if (!user) return;
     try {
       let rate = parseFloat(weeklyRate);
-      if (goalType === 'lose') {
-          rate = -Math.abs(rate);
-      } else {
-          rate = Math.abs(rate);
-      }
+      if (goalType === 'lose') rate = -Math.abs(rate);
+      else rate = Math.abs(rate);
 
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
@@ -485,7 +439,8 @@ export default function App() {
     const padding = 30;
     const marginBottom = 20; 
 
-    const allValues = data.flatMap(d => d.actual !== null ? [d.actual, d.targetUpper!, d.targetLower!] : []);
+    const validActuals = data.map(d => d.actual).filter(v => v !== null) as number[];
+    const allValues = [...validActuals, ...data.map(d => d.targetUpper), ...data.map(d => d.targetLower)];
     const minVal = Math.min(...allValues) - 0.2;
     const maxVal = Math.max(...allValues) + 0.2;
     const range = maxVal - minVal || 1;
@@ -493,41 +448,41 @@ export default function App() {
     const getX = (i: number) => padding + (i / (data.length - 1)) * (width - 2 * padding);
     const getY = (val: number) => (height - marginBottom) - padding - ((val - minVal) / range) * ((height - marginBottom) - 2 * padding);
 
-    // Generate Paths
+    // Tunnel Path (Continuous)
+    const targetPath = data.map((d, i) => `${i===0?'M':'L'} ${getX(i)},${getY(d.target)}`).join(' ');
+    const areaPoints = [
+        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
+        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
+    ].join(' ');
+
+    // Actual Line Path (Smart Breaking)
     let actualPath = '';
-    let targetPath = '';
-    
+    let lastValidIndex = -1;
+
     data.forEach((d, i) => {
-        if (d.isGap || d.actual === null) return;
+        if (d.actual === null) return; // Skip drawing TO a null point
         
         const x = getX(i);
-        const yActual = getY(d.actual);
-        const yTarget = getY(d.target!);
-        
-        // Use 'M' (Move) if start of line or previous was gap, 'L' (Line) otherwise
-        const cmd = (i === 0 || data[i-1].isGap) ? 'M' : 'L';
+        const y = getY(d.actual);
 
-        actualPath += `${cmd} ${x},${yActual} `;
-        targetPath += `${cmd} ${x},${yTarget} `;
-    });
-
-    // Build Polygons for Gaps
-    const areaPolygons: any[] = [];
-    let currentSegment: any[] = [];
-
-    data.forEach((d, i) => {
-        if (d.isGap || d.actual === null) {
-            if (currentSegment.length > 0) {
-                areaPolygons.push(currentSegment);
-                currentSegment = [];
-            }
+        if (lastValidIndex === -1) {
+            // First valid point
+            actualPath += `M ${x},${y} `;
         } else {
-            currentSegment.push({ x: getX(i), yTop: getY(d.targetUpper!), yBottom: getY(d.targetLower!) });
+            // Calculate distance from last valid point
+            const distance = i - lastValidIndex;
+            
+            // If distance > threshold, BREAK line (Move), else CONNECT (Line)
+            if (distance >= BREAK_LINE_THRESHOLD_DAYS) {
+                actualPath += `M ${x},${y} `;
+            } else {
+                actualPath += `L ${x},${y} `;
+            }
         }
+        lastValidIndex = i;
     });
-    if (currentSegment.length > 0) areaPolygons.push(currentSegment);
 
-    const labelInterval = mode === 'daily' ? Math.ceil(data.length / 6) : 1;
+    const labelInterval = Math.ceil(data.length / 6);
 
     return (
       <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
@@ -535,15 +490,7 @@ export default function App() {
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Render Green Zones */}
-          {areaPolygons.map((seg, idx) => {
-              const points = [
-                  ...seg.map((p: any) => `${p.x},${p.yTop}`),
-                  ...seg.slice().reverse().map((p: any) => `${p.x},${p.yBottom}`)
-              ].join(' ');
-              return <polygon key={idx} points={points} fill="rgba(16, 185, 129, 0.08)" stroke="none" />;
-          })}
-
+          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           <path d={targetPath} fill="none" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1" strokeDasharray="4,4" />
           
           <path 
@@ -557,8 +504,8 @@ export default function App() {
           />
 
           {data.map((d, i) => {
-             if (d.isGap || d.actual === null) return null;
-             const isOffTrack = Math.abs(d.actual - d.target!) > TUNNEL_TOLERANCE;
+             if (d.actual === null) return null;
+             const isOffTrack = Math.abs(d.actual - d.target) > TUNNEL_TOLERANCE;
              const r = mode === 'daily' ? (isOffTrack ? 2.5 : 2) : (isOffTrack ? 3 : 4);
              
              return (
@@ -575,7 +522,6 @@ export default function App() {
           })}
 
           {data.map((d, i) => {
-             if (d.isGap) return null;
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
                 <text key={i} x={getX(i)} y={height - 5} fontSize="10" fill="#64748b" textAnchor="middle">
@@ -588,10 +534,17 @@ export default function App() {
     );
   };
 
-  if (loading) return <div className="h-screen w-full flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
+  // --- UPDATED LOADING SCREEN: Fixed Layout ---
+  if (loading) return (
+    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50 overflow-hidden">
+        <div className="text-blue-500 animate-pulse font-bold text-lg flex items-center gap-3">
+            <Activity size={24} /> Loading RateTracker...
+        </div>
+    </div>
+  );
 
   if (!user) return (
-    <div className="fixed inset-0 w-full bg-slate-950 grid place-items-center p-6 overflow-hidden overscroll-none">
+    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 grid place-items-center p-6 overflow-hidden overscroll-none">
         <div className="fixed inset-0 bg-slate-950 -z-10" />
         <div className="max-w-xs text-center w-full">
             <Activity size={48} className="text-blue-500 mx-auto mb-4" />
@@ -609,7 +562,6 @@ export default function App() {
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
-      {/* Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
         <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
         <div className="flex gap-2">
@@ -647,7 +599,6 @@ export default function App() {
                     </div>
                 </div>
 
-                {/* Chart Controls */}
                 <section>
                     <div className="flex justify-between items-end mb-3 px-1 flex-wrap gap-2">
                         <div>
