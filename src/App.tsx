@@ -53,8 +53,7 @@ const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
 const TARGET_TOLERANCE = 0.2; 
-// Removed EMA_ALPHA
-const MEDIAN_WINDOW_SIZE = 7; // Look at last 7 entries to find the "middle" true weight
+const MEDIAN_WINDOW_SIZE = 7; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -85,6 +84,7 @@ interface WeeklySummary {
   count: number;
   entries: WeightEntry[];
   target: number;
+  startTarget: number; // New field for smooth interpolation
   delta: number;
   hasPrev: boolean;
   inTunnel: boolean; 
@@ -124,7 +124,6 @@ const getDaysArray = (start: Date, end: Date) => {
     return arr;
 };
 
-// Helper to calculate median of an array of numbers
 const calculateMedian = (values: number[]): number => {
     if (values.length === 0) return 0;
     const sorted = [...values].sort((a, b) => a - b);
@@ -239,7 +238,7 @@ export default function App() {
     };
   }, [user]);
 
-  // --- CALCULATIONS (MODIFIED FOR MEDIAN) ---
+  // --- CALCULATIONS ---
   const { weeklyData, trendMap, currentTrendRate } = useMemo(() => {
     if (weights.length === 0 || !settings) {
         return { weeklyData: [] as WeeklySummary[], trendMap: new Map(), currentTrendRate: 0 };
@@ -247,17 +246,13 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // 1. Calculate Rolling Median Trend
+    // Rolling Median Trend
     const tMap = new Map<string, number>();
-    
     sortedWeights.forEach((entry, index) => {
-        // Create a window of the current entry + previous entries up to window size
         const startIndex = Math.max(0, index - MEDIAN_WINDOW_SIZE + 1);
         const windowSlice = sortedWeights.slice(startIndex, index + 1);
         const windowValues = windowSlice.map(w => w.weight);
-        
-        const median = calculateMedian(windowValues);
-        tMap.set(entry.date, median);
+        tMap.set(entry.date, calculateMedian(windowValues));
     });
 
     const groups: Record<string, WeightEntry[]> = {};
@@ -274,19 +269,20 @@ export default function App() {
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
       const rawAvg = valSum / entries.length;
       
-      const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
-      const trendAvg = trendSum / entries.length;
-
+      // CHANGE 1: WEEKLY DATAPOINT IS NOW MEDIAN
+      const medianWeight = calculateMedian(entries.map(e => e.weight));
+      
       const earliestDate = entries[entries.length - 1].date; 
 
       return {
         weekId: weekKey,
         weekLabel: formatDate(earliestDate),
-        actual: trendAvg, 
+        actual: medianWeight, // Used for Weekly Graph
         rawAvg: rawAvg,
         count: entries.length,
         entries: entries,
-        target: 0, 
+        target: 0,
+        startTarget: 0, // Init
         delta: 0,
         hasPrev: false,
         inTunnel: true 
@@ -296,13 +292,22 @@ export default function App() {
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
             processedWeeks[i].target = processedWeeks[i].actual;
+            processedWeeks[i].startTarget = processedWeeks[i].actual; // Start flat
         } else {
             const prev = processedWeeks[i-1];
+            
+            // CHANGE 2: SMOOTH CONNECTION
+            // The start of this week is the end of last week
+            processedWeeks[i].startTarget = prev.target;
+
             const dist = Math.abs(prev.actual - prev.target);
             
+            // Calculate Next Target
             if (dist <= TARGET_TOLERANCE) {
+                // If on track, extend target line
                 processedWeeks[i].target = prev.target + rate;
             } else {
+                // If off track, reset target, but we will interpolate to it
                 processedWeeks[i].target = prev.actual + rate;
             }
             
@@ -360,14 +365,13 @@ export default function App() {
             .map(w => ({
                 label: w.weekId, 
                 weekLabel: w.weekLabel,
-                actual: w.rawAvg, 
+                actual: w.actual, // THIS IS NOW MEDIAN
                 trend: w.actual, 
                 target: w.target,
                 targetUpper: w.target + TARGET_TOLERANCE,
                 targetLower: w.target - TARGET_TOLERANCE,
             }));
     } else {
-        const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
         const allDays = getDaysArray(startDate, now);
@@ -382,9 +386,11 @@ export default function App() {
             if (parentWeek) {
                 const dayNum = new Date(dateStr).getDay(); 
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
-                const weekStartTarget = parentWeek.target - rate;
-                const dailyProgress = (dayIndex + 1) / 7;
-                dailyTarget = weekStartTarget + (rate * dailyProgress);
+                
+                // CHANGE 3: SMOOTH DAILY INTERPOLATION
+                // Lerp between Week Start Target and Week End Target
+                const progress = (dayIndex + 1) / 7;
+                dailyTarget = parentWeek.startTarget + (progress * (parentWeek.target - parentWeek.startTarget));
                 targetFound = true;
             }
 
@@ -558,8 +564,6 @@ export default function App() {
     
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
-    
-    // Padding: Left maintained at 32 for Y-axis text
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
@@ -586,7 +590,7 @@ export default function App() {
     const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
-    // --- GRID LINES ---
+    // --- GRID ---
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
@@ -625,7 +629,7 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
           
-          {/* HORIZONTAL GRID & Y-AXIS LABELS (Always Visible) */}
+          {/* GRID & Y-AXIS */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
@@ -679,7 +683,7 @@ export default function App() {
              );
           })}
 
-          {/* SMART X-AXIS LABELS */}
+          {/* SMART X-AXIS */}
           {data.map((d, i) => {
              const xPos = getX(i);
              const isFirst = i === 0;
@@ -688,22 +692,18 @@ export default function App() {
              let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
 
-             // 1. Always render First
              if (isFirst) {
                  shouldRender = true;
                  anchor = "start";
              }
-             // 2. Always render Last
              else if (isLast) {
                  shouldRender = true;
                  anchor = "end";
              }
-             // 3. Render intermediate if space permits (Buffer Zone Logic)
              else {
                  const distToLast = lastPointX - xPos;
                  const distToPrev = xPos - lastRenderedX;
                  
-                 // Must clear BOTH the Previous label AND the Final label
                  if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
                      shouldRender = true;
                  }
@@ -711,7 +711,6 @@ export default function App() {
 
              if (!shouldRender) return null;
 
-             // Update tracker only if we actually rendered
              lastRenderedX = xPos;
 
              return (
