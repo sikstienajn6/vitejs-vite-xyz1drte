@@ -260,6 +260,7 @@ export default function App() {
       };
     });
 
+    // TUNNEL LOGIC: ANCHOR RESET
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
             processedWeeks[i].target = processedWeeks[i].actual;
@@ -267,9 +268,12 @@ export default function App() {
             const prev = processedWeeks[i-1];
             const dist = Math.abs(prev.actual - prev.target);
             
+            // IF previous point was safe -> Continue Road
             if (dist <= TARGET_TOLERANCE) {
                 processedWeeks[i].target = prev.target + rate;
-            } else {
+            } 
+            // IF previous point was OUT -> Reset Road to ACTUAL (Snap to user)
+            else {
                 processedWeeks[i].target = prev.actual + rate;
             }
             
@@ -482,8 +486,6 @@ export default function App() {
 
   const handleDragMove = (e: MouseEvent | TouchEvent) => {
     if (!isDraggingRef.current) return;
-    
-    // Prevent scroll on mobile while dragging
     if (e.type === 'touchmove') e.preventDefault();
 
     const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
@@ -511,7 +513,6 @@ export default function App() {
     window.removeEventListener('touchend', handleDragEnd);
   };
 
-  // Click to toggle (as fallback)
   const toggleExpand = () => {
       if (!isDraggingRef.current) {
           setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
@@ -528,8 +529,9 @@ export default function App() {
 
     const width = 600; 
     const expanded = height > SNAP_THRESHOLD;
-    // Margins
-    const padding = { top: 20, bottom: 30, left: expanded ? 40 : 30, right: 20 };
+    
+    // TIGHT MARGINS: Reduced top/bottom padding to maximize graph size
+    const padding = { top: 10, bottom: 20, left: expanded ? 40 : 30, right: 20 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -539,7 +541,7 @@ export default function App() {
         return vals;
     });
     
-    // Smart Ranging: 5% buffer
+    // 5% Buffer
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
@@ -579,7 +581,6 @@ export default function App() {
         className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
         style={{height: height}}
       >
-        {/* Click chart area toggles explanation */}
         <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer">
           
           {/* Grid */}
