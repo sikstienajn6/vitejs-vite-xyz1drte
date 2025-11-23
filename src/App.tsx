@@ -243,9 +243,9 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // Group by Week
+    // Group by Week - FIXED: Uses sortedWeights
     const groups: Record<string, WeightEntry[]> = {};
-    weights.forEach(entry => {
+    sortedWeights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
       if (!groups[weekKey]) groups[weekKey] = [];
       groups[weekKey].push(entry);
@@ -278,14 +278,11 @@ export default function App() {
             processedWeeks[i].target = processedWeeks[i].median;
         } else {
             const prev = processedWeeks[i-1];
-            // Check if previous week finished "In Tunnel"
             const dist = Math.abs(prev.median - prev.target);
             
             if (dist <= TARGET_TOLERANCE) {
-                // If on track, continue trajectory
                 processedWeeks[i].target = prev.target + rate;
             } else {
-                // If deviated, reset target to current reality
                 processedWeeks[i].target = prev.median + rate;
             }
             
@@ -336,7 +333,6 @@ export default function App() {
                 targetLower: w.target - TARGET_TOLERANCE,
             }));
     } else {
-        // DAILY MODE: Interpolate from Weekly Targets
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
@@ -350,15 +346,9 @@ export default function App() {
             let targetFound = false;
 
             if (parentWeek) {
-                // Logic: Center the Target on the middle of the week (Wednesday/Thursday)
-                // Then slope it based on the rate.
-                // Assuming parentWeek.target is the END of week target.
                 const dayNum = new Date(dateStr).getDay(); 
-                const dayIndex = dayNum === 0 ? 6 : dayNum - 1; // Mon=0, Sun=6
+                const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
                 
-                // If rate is weekly, daily rate is rate/7
-                // Start of week target = WeekTarget - Rate
-                // Daily Target = (WeekTarget - Rate) + (Rate * (dayIndex+1)/7)
                 const weekStartTarget = parentWeek.target - rate;
                 const dailyProgress = (dayIndex + 1) / 7;
                 dailyTarget = weekStartTarget + (rate * dailyProgress);
@@ -368,7 +358,6 @@ export default function App() {
             return {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
-                // RAW DATA ONLY for the Trend Line
                 trend: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 target: targetFound ? dailyTarget : 0,
                 targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
@@ -572,7 +561,6 @@ export default function App() {
     ].join(' ');
 
     let trendPath = '';
-    // Only generate path if we have > 1 point
     if (count > 1) {
         let lastValidT = -1;
         data.forEach((d, i) => {
