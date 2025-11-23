@@ -260,7 +260,6 @@ export default function App() {
       };
     });
 
-    // TUNNEL LOGIC: ANCHOR RESET
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
             processedWeeks[i].target = processedWeeks[i].actual;
@@ -268,12 +267,9 @@ export default function App() {
             const prev = processedWeeks[i-1];
             const dist = Math.abs(prev.actual - prev.target);
             
-            // IF previous point was safe -> Continue Road
             if (dist <= TARGET_TOLERANCE) {
                 processedWeeks[i].target = prev.target + rate;
-            } 
-            // IF previous point was OUT -> Reset Road to ACTUAL (Snap to user)
-            else {
+            } else {
                 processedWeeks[i].target = prev.actual + rate;
             }
             
@@ -530,8 +526,10 @@ export default function App() {
     const width = 600; 
     const expanded = height > SNAP_THRESHOLD;
     
-    // TIGHT MARGINS: Reduced top/bottom padding to maximize graph size
-    const padding = { top: 10, bottom: 20, left: expanded ? 40 : 30, right: 20 };
+    // EXTREME FILL MARGINS:
+    // Top: 5px (bare minimum)
+    // Bottom: 15px (just enough for text)
+    const padding = { top: 5, bottom: 15, left: expanded ? 40 : 30, right: 20 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -581,6 +579,7 @@ export default function App() {
         className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
         style={{height: height}}
       >
+        {/* Click to toggle explanation */}
         <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer">
           
           {/* Grid */}
