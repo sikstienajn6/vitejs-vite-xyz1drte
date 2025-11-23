@@ -60,6 +60,11 @@ const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
 
+// Height Constants for Snap Logic
+const HEIGHT_COMPRESSED = 250;
+const HEIGHT_EXPANDED = 450;
+const SNAP_THRESHOLD = (HEIGHT_EXPANDED + HEIGHT_COMPRESSED) / 2;
+
 // --- Types ---
 interface WeightEntry {
   id: string;
@@ -134,8 +139,11 @@ export default function App() {
   // Chart State
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
-  const [isChartExpanded, setIsChartExpanded] = useState(false);
-  const [showExplanation, setShowExplanation] = useState(false); // Toggle for explanation card
+  
+  // Drag & Snap State
+  const [chartHeight, setChartHeight] = useState(HEIGHT_COMPRESSED);
+  const [isDragging, setIsDragging] = useState(false);
+  const [showExplanation, setShowExplanation] = useState(false); 
   
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
@@ -456,19 +464,70 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
+  // --- DRAG & SNAP LOGIC (PHYSICS) ---
+  const isDraggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    setIsDragging(true);
+    isDraggingRef.current = true;
+    startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    startHeightRef.current = chartHeight;
+    
+    document.body.style.userSelect = 'none'; 
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    window.addEventListener('touchmove', handleDragMove, { passive: false });
+    window.addEventListener('touchend', handleDragEnd);
+  };
+
+  const handleDragMove = (e: MouseEvent | TouchEvent) => {
+    if (!isDraggingRef.current) return;
+    
+    // Prevent scroll on mobile while dragging
+    if (e.type === 'touchmove') e.preventDefault();
+
+    const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
+    const delta = clientY - startYRef.current;
+    
+    // 1:1 Follow
+    const newHeight = Math.max(HEIGHT_COMPRESSED, Math.min(HEIGHT_EXPANDED, startHeightRef.current + delta));
+    setChartHeight(newHeight);
+  };
+
+  const handleDragEnd = () => {
+    isDraggingRef.current = false;
+    setIsDragging(false);
+    document.body.style.userSelect = '';
+    
+    // Snap Logic
+    setChartHeight(prev => {
+        if (prev > SNAP_THRESHOLD) return HEIGHT_EXPANDED;
+        return HEIGHT_COMPRESSED;
+    });
+
+    window.removeEventListener('mousemove', handleDragMove);
+    window.removeEventListener('mouseup', handleDragEnd);
+    window.removeEventListener('touchmove', handleDragMove);
+    window.removeEventListener('touchend', handleDragEnd);
+  };
+
+  const toggleExpand = () => {
+      setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
+  };
+
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, expanded }: { data: ChartPoint[], mode: 'weekly' | 'daily', expanded: boolean }) => {
+  const ChartRenderer = ({ data, mode, height }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number }) => {
     if (!data || data.length < 2) return (
-      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800 h-[250px]">
+      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
-    const height = expanded ? 450 : 250;
     const width = 600; 
-    
-    // TIGHT VERTICAL FIT: Small margins
-    const padding = { top: 20, bottom: 30, left: expanded ? 40 : 30, right: 20 };
+    // Tightened margins for max vertical space
+    const padding = { top: 20, bottom: 30, left: 40, right: 20 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -478,11 +537,11 @@ export default function App() {
         return vals;
     });
     
-    // Calculate Range with small buffer (5%) instead of fixed 0.2kg
+    // Smart Ranging: Add 5% buffer instead of fixed kg amount to ensure filling
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
-    const buffer = rawRange * 0.05; // 5% buffer
+    const buffer = rawRange * 0.05; 
     
     const minVal = rawMin - buffer;
     const maxVal = rawMax + buffer;
@@ -511,19 +570,22 @@ export default function App() {
         lastValidT = i;
     });
 
-    const labelInterval = Math.ceil(data.length / (expanded ? 10 : 6));
+    const labelInterval = Math.ceil(data.length / (width / 60)); 
 
     return (
-      <div className="w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none transition-all duration-300 ease-in-out" style={{height: height}}>
+      // Applied transition class conditionally based on dragging state
+      <div 
+        className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
+        style={{height: height}}
+      >
         {/* Click to toggle explanation */}
         <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer">
-          
           {/* Grid */}
           <line x1={padding.left} y1={getY(minVal)} x2={width-padding.right} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding.left} y1={getY(maxVal)} x2={width-padding.right} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Y-Axis Labels */}
-          {expanded && (
+          {/* Labels - Only show if expanded enough to fit comfortably */}
+          {height > 300 && (
               <>
                 <text x={padding.left - 8} y={getY(minVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
                 <text x={padding.left - 8} y={getY(maxVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
@@ -533,7 +595,7 @@ export default function App() {
           {/* Tunnel */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
-          {/* Dynamic Gradient Trend Line */}
+          {/* Gradient Trend Line */}
           <defs>
             <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
                 {data.map((d, i) => {
@@ -544,11 +606,12 @@ export default function App() {
                 })}
             </linearGradient>
           </defs>
-          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={height > 300 ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
 
           {/* Data Dots */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
+             // Red ONLY if this specific dot is out of bounds
              const isDotOff = d.actual > d.targetUpper || d.actual < d.targetLower;
              
              return (
@@ -556,15 +619,10 @@ export default function App() {
                     <circle 
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
-                        r={expanded ? 3 : 2.5} 
+                        r={height > 300 ? 3 : 2.5} 
                         fill={isDotOff ? "#ef4444" : "#94a3b8"} 
                         opacity={isDotOff ? "0.9" : "0.4"}
                     />
-                    {expanded && (
-                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
-                            {d.actual.toFixed(1)}
-                        </text>
-                    )}
                 </g>
              );
           })}
@@ -671,11 +729,12 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* Chart Container */}
-                    <ChartRenderer data={finalChartData} mode={chartMode} expanded={isChartExpanded}/>
+                    {/* Expandable Chart Container */}
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
                     
-                    {/* Bottom Grip/Legend Area */}
+                    {/* Drag Handle / Grip Area */}
                     <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2">
+                        
                         {/* Legend */}
                         <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
                             <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-500"></div>Trend</div>
@@ -683,20 +742,25 @@ export default function App() {
                             <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Raw</div>
                         </div>
 
-                        {/* Explanation Card (Toggled) */}
+                        {/* Info Explanation */}
                         {showExplanation && (
                             <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
-                                <p><strong>EMA Model:</strong> The blue line is your true trend, smoothed to ignore daily water/food noise. Keep the blue line inside the green tunnel.</p>
+                                <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
+                                    <Info size={12} className="text-blue-500" /> EMA Model
+                                </div>
+                                <p>Blue Line = <strong>Trend Weight</strong> (smoothed). Grey dots = Scale readings. Red = Off track.</p>
                             </div>
                         )}
 
-                        {/* Expand Toggle Button */}
-                        <button 
-                            onClick={() => setIsChartExpanded(!isChartExpanded)}
-                            className="w-full h-6 flex items-center justify-center hover:bg-slate-800 transition-colors rounded-lg"
+                        {/* Handle */}
+                        <div 
+                            className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg touch-none"
+                            onMouseDown={handleDragStart}
+                            onTouchStart={handleDragStart}
+                            onClick={toggleExpand} // Fallback click
                         >
-                            {isChartExpanded ? <Minimize2 size={16} className="text-slate-600" /> : <Maximize2 size={16} className="text-slate-600" />}
-                        </button>
+                            <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
+                        </div>
                     </div>
                 </section>
 
