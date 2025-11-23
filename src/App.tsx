@@ -52,7 +52,8 @@ const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
-const TARGET_TOLERANCE = 0.2; 
+const TOLERANCE_WEEKLY = 0.5; // Median is stable, tighter tolerance
+const TOLERANCE_DAILY = 1.2;  // Raw daily data is noisy (water weight), wider tolerance
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -243,7 +244,6 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // Group by Week - FIXED: Uses sortedWeights
     const groups: Record<string, WeightEntry[]> = {};
     sortedWeights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
@@ -252,8 +252,8 @@ export default function App() {
     });
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+    const activeTolerance = TOLERANCE_WEEKLY; // Use Weekly tolerance for logic checks
     
-    // 1. Calculate Weekly Medians
     let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const rawMedian = calculateMedian(entries.map(e => e.weight));
@@ -272,7 +272,7 @@ export default function App() {
       };
     });
 
-    // 2. Propagate Target & Tunnel Logic (Week-to-Week)
+    // Propagate Target Logic (Week-to-Week)
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
             processedWeeks[i].target = processedWeeks[i].median;
@@ -280,7 +280,8 @@ export default function App() {
             const prev = processedWeeks[i-1];
             const dist = Math.abs(prev.median - prev.target);
             
-            if (dist <= TARGET_TOLERANCE) {
+            // Use Weekly Tolerance for trajectory resets
+            if (dist <= activeTolerance) {
                 processedWeeks[i].target = prev.target + rate;
             } else {
                 processedWeeks[i].target = prev.median + rate;
@@ -289,10 +290,9 @@ export default function App() {
             processedWeeks[i].delta = processedWeeks[i].median - prev.median;
             processedWeeks[i].hasPrev = true;
         }
-        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].median - processedWeeks[i].target) <= TARGET_TOLERANCE;
+        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].median - processedWeeks[i].target) <= activeTolerance;
     }
 
-    // 3. Sync Rate with Last Week's Delta (User Request)
     const lastRate = processedWeeks.length > 0 ? processedWeeks[processedWeeks.length - 1].delta : 0;
 
     return { weeklyData: processedWeeks, currentTrendRate: lastRate };
@@ -329,10 +329,12 @@ export default function App() {
                 actual: w.median, 
                 trend: w.median, 
                 target: w.target,
-                targetUpper: w.target + TARGET_TOLERANCE,
-                targetLower: w.target - TARGET_TOLERANCE,
+                // Weekly Tunnel
+                targetUpper: w.target + TOLERANCE_WEEKLY,
+                targetLower: w.target - TOLERANCE_WEEKLY,
             }));
     } else {
+        // DAILY MODE
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
@@ -360,8 +362,9 @@ export default function App() {
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 trend: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 target: targetFound ? dailyTarget : 0,
-                targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
-                targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
+                // Daily Tunnel
+                targetUpper: targetFound ? dailyTarget + TOLERANCE_DAILY : 0,
+                targetLower: targetFound ? dailyTarget - TOLERANCE_DAILY : 0,
             };
         }).filter(p => p.target !== 0); 
     }
@@ -747,7 +750,7 @@ export default function App() {
                             <div className="flex items-center gap-2">
                                 <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
                             </div>
-                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
+                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{chartMode === 'daily' ? TOLERANCE_DAILY : TOLERANCE_WEEKLY}kg</p>
                         </div>
                         
                         <div className="flex gap-2">
