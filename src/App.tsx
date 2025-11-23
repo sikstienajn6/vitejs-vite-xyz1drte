@@ -113,8 +113,9 @@ export default function App() {
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   
   // Rate Inputs
+  const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
-  const [monthlyRate, setMonthlyRate] = useState('0.87'); // 0.2 * 4.345
+  const [monthlyRate, setMonthlyRate] = useState('0.87'); 
 
   // --- AUTH HANDLING ---
   useEffect(() => {
@@ -159,9 +160,15 @@ export default function App() {
       if (snapshot.exists()) {
         const s = snapshot.data() as SettingsData;
         setSettings(s);
+        
+        // Initialize local state from DB
         const wRate = s.weeklyRate ? s.weeklyRate : 0;
-        setWeeklyRate(wRate.toString());
-        setMonthlyRate((wRate * 4.345).toFixed(2));
+        const isNegative = wRate < 0;
+        const absRate = Math.abs(wRate);
+        
+        setGoalType(isNegative ? 'lose' : 'gain');
+        setWeeklyRate(absRate.toString());
+        setMonthlyRate((absRate * 4.345).toFixed(2));
       } else {
         setSettings(null);
         setView('settings'); 
@@ -248,7 +255,7 @@ export default function App() {
         const wKey = getWeekKey(entry.date);
         const parentWeek = weekMap.get(wKey);
         
-        let dailyTarget = entry.weight; // Fallback
+        let dailyTarget = entry.weight; 
         
         if (parentWeek) {
             const dayNum = new Date(entry.date).getDay(); // 0=Sun
@@ -273,20 +280,35 @@ export default function App() {
 
   // --- ACTIONS ---
   const handleRateChange = (val: string, type: 'weekly' | 'monthly') => {
-    if (val === '') {
+    // FORCE DOT NOTATION: Replace comma with dot immediately
+    const sanitizedVal = val.replace(',', '.');
+    
+    if (sanitizedVal === '') {
         setWeeklyRate('');
         setMonthlyRate('');
         return;
     }
     
-    const num = parseFloat(val);
-    if (isNaN(num)) return; // Handle invalid input
+    // Allow intermediate states like "0."
+    if (sanitizedVal === '.') {
+        if (type === 'weekly') setWeeklyRate('.');
+        else setMonthlyRate('.');
+        return;
+    }
+
+    const num = parseFloat(sanitizedVal);
+    if (isNaN(num)) {
+        // If invalid, just update the state string to allow correction
+        if (type === 'weekly') setWeeklyRate(sanitizedVal);
+        else setMonthlyRate(sanitizedVal);
+        return; 
+    }
 
     if (type === 'weekly') {
-        setWeeklyRate(val);
+        setWeeklyRate(sanitizedVal);
         setMonthlyRate((num * 4.345).toFixed(2));
     } else {
-        setMonthlyRate(val);
+        setMonthlyRate(sanitizedVal);
         setWeeklyRate((num / 4.345).toFixed(2));
     }
   };
@@ -295,9 +317,10 @@ export default function App() {
     e.preventDefault();
     if (!weightInput || !user) return;
     try {
+      const sanitizedWeight = parseFloat(weightInput.replace(',', '.'));
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
-        weight: parseFloat(weightInput),
+        weight: sanitizedWeight,
         date: dateInput,
         createdAt: serverTimestamp()
       });
@@ -312,9 +335,17 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     try {
+      let rate = parseFloat(weeklyRate);
+      // Apply direction based on toggle
+      if (goalType === 'lose') {
+          rate = -Math.abs(rate);
+      } else {
+          rate = Math.abs(rate);
+      }
+
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
-        weeklyRate: parseFloat(weeklyRate),
+        weeklyRate: rate,
         updatedAt: serverTimestamp()
       });
       setView('dashboard');
@@ -432,7 +463,10 @@ export default function App() {
   if (loading) return <div className="h-screen w-full flex items-center justify-center text-blue-500 animate-pulse bg-slate-950">Loading...</div>;
 
   if (!user) return (
-    <div className="min-h-screen w-full bg-slate-950 grid place-items-center p-6 overflow-x-hidden">
+    <div className="min-h-screen w-full bg-slate-950 grid place-items-center p-6 overflow-x-hidden relative">
+        {/* FIXED BACKGROUND to prevent white bars */}
+        <div className="fixed inset-0 bg-slate-950 -z-10" />
+        
         <div className="max-w-xs text-center w-full">
             <Activity size={48} className="text-blue-500 mx-auto mb-4" />
             <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
@@ -447,9 +481,11 @@ export default function App() {
   );
 
   return (
-    // Removed pb-20 if view is settings to prevent extra whitespace
-    <div className={`min-h-screen w-full bg-slate-950 text-slate-100 font-sans overflow-x-hidden ${view === 'settings' ? '' : 'pb-20'}`}>
+    <div className={`min-h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans overflow-x-hidden relative ${view === 'settings' ? '' : 'pb-20'}`}>
       
+      {/* FIXED BACKGROUND LAYER to prevent white bars on overscroll */}
+      <div className="fixed inset-0 bg-slate-950 -z-10" />
+
       {/* Header */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm sticky top-0 z-10 flex justify-between items-center max-w-md mx-auto border-b border-slate-800">
         <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
@@ -464,7 +500,7 @@ export default function App() {
       </div>
 
       {/* Content Container */}
-      <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-[calc(100vh-80px)] flex flex-col' : 'space-y-5'}`}>
+      <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-[calc(100dvh-80px)] flex flex-col' : 'space-y-5'}`}>
         
         {view === 'dashboard' && (
           <>
@@ -513,7 +549,13 @@ export default function App() {
               <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
               <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
                 <div className="flex gap-2">
-                    <input type="number" step="0.01" placeholder="0.0" required className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" value={weightInput} onChange={(e) => setWeightInput(e.target.value)}/>
+                    {/* LOG WEIGHT INPUT: Force text/decimal to avoid comma issues and enforce formatting */}
+                    <input 
+                        type="text" inputMode="decimal" placeholder="0.0" required 
+                        className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
+                        value={weightInput} 
+                        onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
+                    />
                     <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
                 </div>
                 <div className="relative">
@@ -526,7 +568,6 @@ export default function App() {
             <section>
               <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
               <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
-                {/* TABLE HEADER UPDATED: Center alignment for Delta column */}
                 <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
                   <div>Week</div>
                   <div className="text-right">Avg</div>
@@ -545,7 +586,6 @@ export default function App() {
                              <span className="text-[10px] text-slate-500">{item.count} entries</span>
                           </div>
                           <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
-                          {/* TABLE ROW UPDATED: Center alignment for Delta column */}
                           <div className={`text-center font-bold text-xs ${rateColor}`}>
                             {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
                           </div>
@@ -579,7 +619,6 @@ export default function App() {
           </>
         )}
 
-        {/* --- SETTINGS VIEW UPDATED --- */}
         {view === 'settings' && (
            <div className="flex flex-col h-full">
              <div className="flex items-center gap-2 mb-4 shrink-0">
@@ -589,40 +628,58 @@ export default function App() {
                 <h2 className="font-bold text-lg text-white">Plan Settings</h2>
              </div>
 
-             {/* Main Settings Card - Updated for full height / no scroll issues */}
              <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-6 flex-1 flex flex-col">
                 
+                {/* GOAL TOGGLE: Removes need for Minus sign on keyboard */}
+                <div className="flex bg-slate-800 p-1 rounded-xl mb-2">
+                    <button 
+                        type="button"
+                        onClick={() => setGoalType('gain')}
+                        className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'gain' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
+                    >
+                        Gain Weight (+)
+                    </button>
+                    <button 
+                        type="button"
+                        onClick={() => setGoalType('lose')}
+                        className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'lose' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
+                    >
+                        Lose Weight (-)
+                    </button>
+                </div>
+
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Weekly Rate (kg/wk)</label>
                     <input 
-                        type="number" step="0.01" required 
+                        type="text" inputMode="decimal" required 
                         value={weeklyRate} 
                         onChange={(e) => handleRateChange(e.target.value, 'weekly')}
                         className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                        placeholder="0.2"
                     />
                 </div>
 
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Monthly Rate (kg/mo)</label>
                     <input 
-                        type="number" step="0.01" required 
+                        type="text" inputMode="decimal" required 
                         value={monthlyRate} 
                         onChange={(e) => handleRateChange(e.target.value, 'monthly')}
                         className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                        placeholder="0.87"
                     />
                 </div>
 
                 <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
                     <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
                     <p className="leading-relaxed">
-                        Positive for gaining, negative for losing. <br/>
                         The chart tunnel is ±{TUNNEL_TOLERANCE}kg to account for water weight.
                     </p>
                 </div>
 
                 <div className="pt-4 mt-auto">
                     <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
-                        Save Plan
+                        Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
                     </button>
                 </div>
              </form>
