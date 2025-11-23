@@ -529,7 +529,7 @@ export default function App() {
     // EXTREME FILL MARGINS:
     // Top: 5px (bare minimum)
     // Bottom: 15px (just enough for text)
-    const padding = { top: 5, bottom: 15, left: expanded ? 40 : 30, right: 20 };
+    const padding = { top: 0, bottom: 0, left: expanded ? 40 : 30, right: 20 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -589,8 +589,8 @@ export default function App() {
           {/* Y-Axis Labels */}
           {expanded && (
               <>
-                <text x={padding.left - 8} y={getY(minVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
-                <text x={padding.left - 8} y={getY(maxVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
+                <text x={padding.left - 8} y={getY(minVal) - 4} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
+                <text x={padding.left - 8} y={getY(maxVal) + 4} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
               </>
           )}
 
@@ -621,11 +621,11 @@ export default function App() {
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
                         r={expanded ? 3 : 2.5} 
-                        fill={isDotOff ? "#ef4444" : "#94a3b8"} 
+                        fill="#94a3b8" 
                         opacity={isDotOff ? "0.9" : "0.4"}
                     />
                     {expanded && (
-                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
+                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="12" fill="#cbd5e1" textAnchor="middle">
                             {d.actual.toFixed(1)}
                         </text>
                     )}
@@ -637,7 +637,7 @@ export default function App() {
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
-                <text key={i} x={getX(i)} y={height - 5} fontSize="10" fill="#64748b" textAnchor="middle">
+                <text key={i} x={getX(i)} y={height - 5} fontSize="12" fill="#64748b" textAnchor="middle">
                     {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                 </text>
              );
