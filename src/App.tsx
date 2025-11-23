@@ -53,8 +53,8 @@ const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
-const TARGET_TOLERANCE = 0.2; // Strict tolerance for the Trend Line
-const EMA_ALPHA = 0.1; // Smoothing factor (0.1 = 10% of new reading, 90% of history)
+const TARGET_TOLERANCE = 0.2; 
+const EMA_ALPHA = 0.1; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 
@@ -71,22 +71,24 @@ interface SettingsData {
   updatedAt: any;
 }
 
+// FIX: Ensure this interface matches exactly what we return in useMemo
 interface WeeklySummary {
   weekId: string;
   weekLabel: string;
-  actual: number; // This is now Trend Average
-  rawAvg: number; // This is Scale Average
+  actual: number; // Trend Avg
+  rawAvg: number; // Scale Avg
   count: number;
   entries: WeightEntry[];
   target: number;
   delta: number;
   hasPrev: boolean;
+  inTunnel: boolean; // Added this missing property
 }
 
 interface ChartPoint {
     label: string; 
-    actual: number | null; // Raw Scale Weight
-    trend: number | null;  // Calculated Trend Weight
+    actual: number | null; 
+    trend: number | null;  
     target: number;
     targetUpper: number;
     targetLower: number;
@@ -132,7 +134,6 @@ export default function App() {
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [isChartExpanded, setIsChartExpanded] = useState(false);
   
-  // Rate Inputs
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87'); 
@@ -200,31 +201,24 @@ export default function App() {
     };
   }, [user]);
 
-  // --- CALCULATIONS: Trend Engine ---
+  // --- CALCULATIONS ---
   const { weeklyData, trendMap, currentTrendRate } = useMemo(() => {
     if (weights.length === 0 || !settings) {
-        return { weeklyData: [], trendMap: new Map(), currentTrendRate: 0 };
+        return { weeklyData: [] as WeeklySummary[], trendMap: new Map(), currentTrendRate: 0 };
     }
 
-    // 1. Sort weights ascending
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // 2. Calculate Trend (EMA)
-    // We use a map to store calculated trend for every date
+    // Calculate Trend (EMA)
     const tMap = new Map<string, number>();
-    let currentTrend = sortedWeights[0].weight; // Initialize with first weighing
+    let currentTrend = sortedWeights[0].weight; 
 
-    // To be statistically accurate, we should iterate day by day, 
-    // but for a weight app, iterating entry by entry is standard practice 
-    // if we assume "Carried Forward" for missing days.
-    // Let's iterate ENTRY by ENTRY for the EMA calculation.
     sortedWeights.forEach((entry) => {
-        // EMA Formula: NewTrend = PrevTrend + alpha * (Actual - PrevTrend)
         currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
         tMap.set(entry.date, currentTrend);
     });
 
-    // 3. Group by Week
+    // Group by Week
     const groups: Record<string, WeightEntry[]> = {};
     weights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
@@ -234,12 +228,12 @@ export default function App() {
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
-    let processedWeeks = Object.keys(groups).sort().map((weekKey) => {
+    // FIX: Explicitly type the array so we don't miss properties
+    let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
       const rawAvg = valSum / entries.length;
       
-      // Calculate average TREND for the week (smoother)
       const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
       const trendAvg = trendSum / entries.length;
 
@@ -248,17 +242,18 @@ export default function App() {
       return {
         weekId: weekKey,
         weekLabel: formatDate(earliestDate),
-        actual: trendAvg, // We now track the TREND Average
+        actual: trendAvg, 
         rawAvg: rawAvg,
         count: entries.length,
         entries: entries,
         target: 0, 
         delta: 0,
-        hasPrev: false
+        hasPrev: false,
+        inTunnel: true // Default, calculated below
       };
     });
 
-    // 4. Set Targets based on Trend
+    // Set Targets & Tunnel Status
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
             processedWeeks[i].target = processedWeeks[i].actual;
@@ -266,32 +261,28 @@ export default function App() {
             const prev = processedWeeks[i-1];
             const dist = Math.abs(prev.actual - prev.target);
             
-            // If Trend was within tolerance, continue path
             if (dist <= TARGET_TOLERANCE) {
                 processedWeeks[i].target = prev.target + rate;
             } else {
-                // Reset anchor
                 processedWeeks[i].target = prev.actual + rate;
             }
             
             processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
             processedWeeks[i].hasPrev = true;
         }
+        // FIX: Calculate inTunnel status based on TREND vs TARGET
+        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
     }
 
-    // 5. Calculate Current Rate (7 Day Slope of Trend)
-    // Find trend today (or last entry) vs trend ~7 days ago
+    // Calculate Current Rate
     const lastEntry = sortedWeights[sortedWeights.length - 1];
     const lastTrend = tMap.get(lastEntry.date) || 0;
     
-    // Find entry closest to 7 days ago
     const sevenDaysAgo = new Date(lastEntry.date);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const sdaString = sevenDaysAgo.toISOString().split('T')[0];
     
-    // Find closest weight entry before or on that date
     let prevTrend = lastTrend; 
-    // Simple search backwards
     for(let i = sortedWeights.length - 2; i >= 0; i--) {
         if (sortedWeights[i].date <= sdaString) {
             prevTrend = tMap.get(sortedWeights[i].date) || 0;
@@ -326,23 +317,19 @@ export default function App() {
     if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
     if (startDate > now) startDate = earliestDataDate;
 
-    // WEEKLY MODE
     if (chartMode === 'weekly') {
         return weeklyData
             .filter(w => new Date(w.entries[0].date) >= startDate)
             .map(w => ({
                 label: w.weekId, 
                 weekLabel: w.weekLabel,
-                actual: w.rawAvg, // Show RAW avg as dot
-                trend: w.actual,  // Show Trend avg as line
+                actual: w.rawAvg, 
+                trend: w.actual, 
                 target: w.target,
                 targetUpper: w.target + TARGET_TOLERANCE,
                 targetLower: w.target - TARGET_TOLERANCE,
             }));
-    } 
-    
-    // DAILY MODE
-    else {
+    } else {
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
@@ -364,13 +351,6 @@ export default function App() {
                 targetFound = true;
             }
 
-            // Get Trend from map if exists, or linear interpolate? 
-            // For simplicity in gaps, we won't render the trend line on gaps, 
-            // OR we can carry forward the last known trend. 
-            // Let's try to find the nearest trend value for visualization if needed, 
-            // but `trendMap` only has values on days with weights.
-            // Visualizing trend only on days with data is safer.
-            
             return {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
@@ -491,7 +471,6 @@ export default function App() {
     const padding = expanded ? 50 : 30;
     const marginBottom = 30; 
 
-    // Min/Max based on Trend and Actuals
     const validValues = data.flatMap(d => {
         const vals = [];
         if (d.actual !== null) vals.push(d.actual);
@@ -507,13 +486,11 @@ export default function App() {
     const getX = (i: number) => padding + (i / (data.length - 1)) * (width - 2 * padding);
     const getY = (val: number) => (height - marginBottom) - padding - ((val - minVal) / range) * ((height - marginBottom) - 2 * padding);
 
-    // 1. Tunnel (Continuous)
     const areaPoints = [
         ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
         ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
     ].join(' ');
 
-    // 2. Trend Line (Signal) - Connects valid points
     let trendPath = '';
     let lastValidT = -1;
     data.forEach((d, i) => {
@@ -521,7 +498,6 @@ export default function App() {
         const x = getX(i);
         const y = getY(d.trend);
         if (lastValidT === -1) trendPath += `M ${x},${y} `;
-        // We bridge gaps for trend line to show continuity of body mass
         else trendPath += `L ${x},${y} `; 
         lastValidT = i;
     });
@@ -531,29 +507,23 @@ export default function App() {
     return (
       <div className={`w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm ${expanded ? 'h-full' : ''}`}>
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
-          {/* Grid */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Y Axis Labels (Expanded) */}
           {expanded && (
               <>
                 <text x={padding - 10} y={getY(minVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
                 <text x={padding - 10} y={getY(maxVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
-                <text x={padding - 10} y={getY((minVal+maxVal)/2)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{((minVal+maxVal)/2).toFixed(1)}</text>
               </>
           )}
 
-          {/* Tunnel */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
-          
-          {/* Trend Line (Solid Blue) */}
           <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
 
-          {/* Raw Data Dots (Faint/Ghost) */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             // Color based on TREND deviation, not raw deviation
+             
+             // FIX: Use isTrendOff to color the ghost dots
              const isTrendOff = d.trend ? (d.trend > d.targetUpper || d.trend < d.targetLower) : false;
              
              return (
@@ -562,10 +532,10 @@ export default function App() {
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
                         r={expanded ? 3 : 2} 
-                        fill="#94a3b8" 
-                        opacity="0.5"
+                        // Red if trend was bad at this time, Grey if good
+                        fill={isTrendOff ? "#ef4444" : "#94a3b8"} 
+                        opacity={isTrendOff ? "0.8" : "0.5"}
                     />
-                    {/* Expanded: Value Label above dot */}
                     {expanded && (
                         <text x={getX(i)} y={getY(d.actual) - 8} fontSize="10" fill="#cbd5e1" textAnchor="middle">
                             {d.actual.toFixed(1)}
@@ -575,7 +545,6 @@ export default function App() {
              );
           })}
 
-          {/* X Axis Labels */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
@@ -617,7 +586,6 @@ export default function App() {
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
-      {/* EXPANDED CHART MODAL */}
       {isChartExpanded && (
           <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col p-4 animate-in fade-in duration-200">
               <div className="flex justify-between items-center mb-4 shrink-0">
@@ -630,7 +598,7 @@ export default function App() {
                   <ChartRenderer data={finalChartData} mode={chartMode} expanded={true} />
               </div>
               <div className="mt-4 shrink-0 text-center text-sm text-slate-500">
-                  Blue Line: Trend Weight (Signal) • Grey Dots: Scale Weight (Noise)
+                  Blue Line: Trend Weight (Signal) • Dots: Scale Weight (Noise)
               </div>
           </div>
       )}
