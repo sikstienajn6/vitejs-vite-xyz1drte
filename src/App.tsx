@@ -51,7 +51,9 @@ const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
-const TUNNEL_TOLERANCE = 0.3; 
+const WEEKLY_TOLERANCE = 0.3; // Strict: Averaging removes noise
+const DAILY_TOLERANCE = 0.8;  // Wide: Accounts for water/gut/glycogen noise
+
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -228,7 +230,8 @@ export default function App() {
 
         if (prevData) {
             const distFromPrevTarget = Math.abs(prevData.actual - prevData.target);
-            const wasSafe = distFromPrevTarget <= TUNNEL_TOLERANCE;
+            // Weekly logic uses strict tolerance
+            const wasSafe = distFromPrevTarget <= WEEKLY_TOLERANCE;
             if (wasSafe) {
                 target = prevData.target + rate;
             } else {
@@ -243,11 +246,11 @@ export default function App() {
             count: current.entries.length,
             entries: current.entries,
             target: target,
-            targetUpper: target + TUNNEL_TOLERANCE,
-            targetLower: target - TUNNEL_TOLERANCE,
+            targetUpper: target + WEEKLY_TOLERANCE,
+            targetLower: target - WEEKLY_TOLERANCE,
             delta: prevData ? current.avg - prevData.actual : 0,
             hasPrev: !!prevData,
-            inTunnel: Math.abs(current.avg - target) <= TUNNEL_TOLERANCE
+            inTunnel: Math.abs(current.avg - target) <= WEEKLY_TOLERANCE
         });
     }
 
@@ -290,8 +293,10 @@ export default function App() {
                 weekLabel: w.weekLabel,
                 actual: w.actual,
                 target: w.target,
-                targetUpper: w.targetUpper,
-                targetLower: w.targetLower,
+                targetUpper: w.target, // Weekly handles tolerance in calculation, but we visualize strictly
+                // Wait, use calculated Upper/Lower from weeklyData which uses WEEKLY_TOLERANCE
+                targetUpper: w.target + WEEKLY_TOLERANCE,
+                targetLower: w.target - WEEKLY_TOLERANCE,
             }));
     } 
     
@@ -322,8 +327,9 @@ export default function App() {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 target: targetFound ? dailyTarget : 0,
-                targetUpper: targetFound ? dailyTarget + TUNNEL_TOLERANCE : 0,
-                targetLower: targetFound ? dailyTarget - TUNNEL_TOLERANCE : 0,
+                // USE WIDER TOLERANCE FOR DAILY VIEW
+                targetUpper: targetFound ? dailyTarget + DAILY_TOLERANCE : 0,
+                targetLower: targetFound ? dailyTarget - DAILY_TOLERANCE : 0,
             };
         }).filter(p => p.target !== 0); 
     }
@@ -460,19 +466,15 @@ export default function App() {
     let lastValidIndex = -1;
 
     data.forEach((d, i) => {
-        if (d.actual === null) return; // Skip drawing TO a null point
+        if (d.actual === null) return; 
         
         const x = getX(i);
         const y = getY(d.actual);
 
         if (lastValidIndex === -1) {
-            // First valid point
             actualPath += `M ${x},${y} `;
         } else {
-            // Calculate distance from last valid point
             const distance = i - lastValidIndex;
-            
-            // If distance > threshold, BREAK line (Move), else CONNECT (Line)
             if (distance >= BREAK_LINE_THRESHOLD_DAYS) {
                 actualPath += `M ${x},${y} `;
             } else {
@@ -505,7 +507,8 @@ export default function App() {
 
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             const isOffTrack = Math.abs(d.actual - d.target) > TUNNEL_TOLERANCE;
+             // Check dot color against the calculated bounds (which already used the correct tolerance)
+             const isOffTrack = d.actual > d.targetUpper || d.actual < d.targetLower;
              const r = mode === 'daily' ? (isOffTrack ? 2.5 : 2) : (isOffTrack ? 3 : 4);
              
              return (
@@ -534,7 +537,6 @@ export default function App() {
     );
   };
 
-  // --- UPDATED LOADING SCREEN: Fixed Layout ---
   if (loading) return (
     <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50 overflow-hidden">
         <div className="text-blue-500 animate-pulse font-bold text-lg flex items-center gap-3">
