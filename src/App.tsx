@@ -53,7 +53,8 @@ const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
 const TARGET_TOLERANCE = 0.2; 
-const EMA_ALPHA = 0.1; 
+// Removed EMA_ALPHA
+const MEDIAN_WINDOW_SIZE = 7; // Look at last 7 entries to find the "middle" true weight
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -121,6 +122,17 @@ const getDaysArray = (start: Date, end: Date) => {
         arr.push(new Date(dt).toISOString().split('T')[0]);
     }
     return arr;
+};
+
+// Helper to calculate median of an array of numbers
+const calculateMedian = (values: number[]): number => {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+        return (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+    return sorted[mid];
 };
 
 // --- Main Component ---
@@ -227,7 +239,7 @@ export default function App() {
     };
   }, [user]);
 
-  // --- CALCULATIONS ---
+  // --- CALCULATIONS (MODIFIED FOR MEDIAN) ---
   const { weeklyData, trendMap, currentTrendRate } = useMemo(() => {
     if (weights.length === 0 || !settings) {
         return { weeklyData: [] as WeeklySummary[], trendMap: new Map(), currentTrendRate: 0 };
@@ -235,12 +247,17 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
+    // 1. Calculate Rolling Median Trend
     const tMap = new Map<string, number>();
-    let currentTrend = sortedWeights[0].weight; 
-
-    sortedWeights.forEach((entry) => {
-        currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
-        tMap.set(entry.date, currentTrend);
+    
+    sortedWeights.forEach((entry, index) => {
+        // Create a window of the current entry + previous entries up to window size
+        const startIndex = Math.max(0, index - MEDIAN_WINDOW_SIZE + 1);
+        const windowSlice = sortedWeights.slice(startIndex, index + 1);
+        const windowValues = windowSlice.map(w => w.weight);
+        
+        const median = calculateMedian(windowValues);
+        tMap.set(entry.date, median);
     });
 
     const groups: Record<string, WeightEntry[]> = {};
@@ -597,7 +614,6 @@ export default function App() {
     }
 
     // --- SMART AXIS LOGIC ---
-    // Minimum pixels required between two X-axis labels
     const minLabelSpacing = 35; 
     let lastRenderedX = -999;
     const lastPointX = getX(data.length - 1);
@@ -811,9 +827,9 @@ export default function App() {
                         {showExplanation && (
                             <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
-                                    <Info size={12} className="text-blue-500" /> EMA model
+                                    <Info size={12} className="text-blue-500" /> Rolling median model
                                 </div>
-                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
+                                <p>The Rolling Median system identifies the middle value of recent weigh-ins, effectively ignoring sudden outliers caused by water weight or scale errors.</p>
                             </div>
                         )}
 
