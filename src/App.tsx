@@ -232,28 +232,47 @@ export default function App() {
   }, [weeklyData]);
 
   // --- DAILY CHART DATA PREP ---
+  // --- DAILY CHART DATA PREP ---
   const dailyChartData = useMemo(() => {
-    if (chartMode !== 'daily') return [];
+    if (chartMode !== 'daily' || !settings) return [];
+    
     // Create a map of WeekKey -> Target Info for quick lookup
     const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
+    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
-    // Clone and sort weights ascending for chart
+    // Clone and sort weights ascending by date
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
 
     return sortedWeights.map(entry => {
         const wKey = getWeekKey(entry.date);
         const parentWeek = weekMap.get(wKey);
-        // If we can't find the week (rare), fallback to entry weight
-        const target = parentWeek ? parentWeek.target : entry.weight;
+        
+        let dailyTarget = entry.weight; // Fallback
+        
+        if (parentWeek) {
+            // Calculate which day of the week this is (0 = Mon, 6 = Sun)
+            // Note: .getDay() returns 0 for Sun, 1 for Mon. We convert to Mon=0 scale.
+            const dayNum = new Date(entry.date).getDay(); // 0=Sun, 1=Mon...
+            const dayIndex = dayNum === 0 ? 6 : dayNum - 1; // Mon=0 ... Sun=6
+            
+            // The parentWeek.target is the value at the END of the week (Sunday).
+            // We back-calculate the start of the week by subtracting the rate.
+            // Then we add 1/7th of the rate for each day passed.
+            const weekStartTarget = parentWeek.target - rate;
+            const dailyProgress = (dayIndex + 1) / 7;
+            
+            dailyTarget = weekStartTarget + (rate * dailyProgress);
+        }
+
         return {
             label: formatDate(entry.date),
             actual: entry.weight,
-            target: target,
-            targetUpper: parentWeek ? parentWeek.targetUpper : target + TUNNEL_TOLERANCE,
-            targetLower: parentWeek ? parentWeek.targetLower : target - TUNNEL_TOLERANCE,
+            target: dailyTarget,
+            targetUpper: dailyTarget + TUNNEL_TOLERANCE,
+            targetLower: dailyTarget - TUNNEL_TOLERANCE,
         };
     });
-  }, [weights, weeklyData, chartMode]);
+  }, [weights, weeklyData, chartMode, settings]);
 
 
   // --- ACTIONS ---
