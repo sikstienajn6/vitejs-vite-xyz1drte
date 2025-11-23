@@ -542,7 +542,7 @@ export default function App() {
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
     
-    // Padding: Left increased to accommodate Y-axis text
+    // Padding: Left maintained at 32 for Y-axis text
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
@@ -569,8 +569,8 @@ export default function App() {
     const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
-    // --- GRID LINES CALCULATION ---
-    const gridCount = 5; // How many horizontal lines
+    // --- GRID LINES ---
+    const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
     // --- AREA POINTS ---
@@ -596,10 +596,11 @@ export default function App() {
         });
     }
 
-    // Standard interval for fallback
-    const labelInterval = Math.max(1, Math.floor(data.length / (renderWidth / 55))); 
+    // --- SMART AXIS LOGIC ---
+    // Minimum pixels required between two X-axis labels
+    const minLabelSpacing = 35; 
+    let lastRenderedX = -999;
     const lastPointX = getX(data.length - 1);
-    const overlapThreshold = 40; // Pixels required between labels
 
     return (
       <div 
@@ -608,20 +609,15 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
           
-          {/* GRID & AXES */}
-          {/* Horizontal Grid Lines */}
+          {/* HORIZONTAL GRID & Y-AXIS LABELS (Always Visible) */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
-               {/* Y-Axis Text - Visible in Expanded Mode on Left */}
-               {expanded && (
-                   <text x={padding.left - 6} y={getY(val) + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
-               )}
+               <text x={padding.left - 6} y={getY(val) + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
              </g>
           ))}
-          {/* Vertical Axis Line */}
+          
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
-          {/* X-Axis Baseline */}
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
           {/* TUNNEL */}
@@ -643,7 +639,7 @@ export default function App() {
               <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
           )}
 
-          {/* DATA POINTS & LABELS */}
+          {/* DATA POINTS */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
              const px = getX(i);
@@ -658,7 +654,6 @@ export default function App() {
                         fill="#94a3b8" 
                         opacity={expanded ? "0.9" : "0.6"}
                     />
-                    {/* Floating Weight Label (Expanded Mode) */}
                     {expanded && (
                         <text x={px} y={py - 12} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
                             {d.actual.toFixed(1)}
@@ -668,35 +663,43 @@ export default function App() {
              );
           })}
 
-          {/* X-AXIS LABELS (Collision Corrected) */}
+          {/* SMART X-AXIS LABELS */}
           {data.map((d, i) => {
              const xPos = getX(i);
+             const isFirst = i === 0;
+             const isLast = i === data.length - 1;
+             
              let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
 
-             // 1. Always Render First
-             if (i === 0) {
+             // 1. Always render First
+             if (isFirst) {
                  shouldRender = true;
                  anchor = "start";
              }
-             // 2. Always Render Last
-             else if (i === data.length - 1) {
+             // 2. Always render Last
+             else if (isLast) {
                  shouldRender = true;
                  anchor = "end";
              }
-             // 3. Render Intermediates based on distance
-             else if (i % labelInterval === 0) {
-                 // COLLISION CHECK: Is this point too close to the Last Point?
-                 const distToEnd = lastPointX - xPos;
-                 if (distToEnd > overlapThreshold) {
+             // 3. Render intermediate if space permits (Buffer Zone Logic)
+             else {
+                 const distToLast = lastPointX - xPos;
+                 const distToPrev = xPos - lastRenderedX;
+                 
+                 // Must clear BOTH the Previous label AND the Final label
+                 if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
                      shouldRender = true;
                  }
              }
 
              if (!shouldRender) return null;
 
+             // Update tracker only if we actually rendered
+             lastRenderedX = xPos;
+
              return (
-                <text key={i} x={xPos} y={height - 6} fontSize="10" fill="#64748b" textAnchor={anchor} fontWeight="bold">
+                <text key={i} x={xPos} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
                     {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                 </text>
              );
@@ -808,9 +811,9 @@ export default function App() {
                         {showExplanation && (
                             <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
-                                    <Info size={12} className="text-blue-500" /> EMA Model
+                                    <Info size={12} className="text-blue-500" /> EMA model
                                 </div>
-                                <p>Green Line = On Track. Red Line = Off Track. Grey dots = Raw Scale Readings.</p>
+                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
                             </div>
                         )}
 
