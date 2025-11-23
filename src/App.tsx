@@ -52,8 +52,8 @@ const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
-const TOLERANCE_WEEKLY = 0.5; // Median is stable, tighter tolerance
-const TOLERANCE_DAILY = 1.2;  // Raw daily data is noisy (water weight), wider tolerance
+const TOLERANCE_WEEKLY = 0.5; 
+const TOLERANCE_DAILY = 1.2;  
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -252,7 +252,8 @@ export default function App() {
     });
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-    const activeTolerance = TOLERANCE_WEEKLY; // Use Weekly tolerance for logic checks
+    // Use Weekly Tolerance for the main logic
+    const activeTolerance = TOLERANCE_WEEKLY; 
     
     let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
@@ -280,7 +281,6 @@ export default function App() {
             const prev = processedWeeks[i-1];
             const dist = Math.abs(prev.median - prev.target);
             
-            // Use Weekly Tolerance for trajectory resets
             if (dist <= activeTolerance) {
                 processedWeeks[i].target = prev.target + rate;
             } else {
@@ -329,12 +329,10 @@ export default function App() {
                 actual: w.median, 
                 trend: w.median, 
                 target: w.target,
-                // Weekly Tunnel
                 targetUpper: w.target + TOLERANCE_WEEKLY,
                 targetLower: w.target - TOLERANCE_WEEKLY,
             }));
     } else {
-        // DAILY MODE
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
@@ -362,7 +360,6 @@ export default function App() {
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 trend: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 target: targetFound ? dailyTarget : 0,
-                // Daily Tunnel
                 targetUpper: targetFound ? dailyTarget + TOLERANCE_DAILY : 0,
                 targetLower: targetFound ? dailyTarget - TOLERANCE_DAILY : 0,
             };
@@ -924,7 +921,7 @@ export default function App() {
                     <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
                         <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
                         <p className="leading-relaxed">
-                            The chart tunnel is ±{TARGET_TOLERANCE}kg tolerance from your smoothed Trend Weight.
+                            The chart tunnel is ±{TOLERANCE_WEEKLY}kg tolerance from your smoothed Trend Weight.
                         </p>
                     </div>
 
