@@ -230,7 +230,7 @@ export default function App() {
 
         if (prevData) {
             const distFromPrevTarget = Math.abs(prevData.actual - prevData.target);
-            // Weekly logic uses strict tolerance for anchor resetting
+            // Weekly logic uses strict tolerance
             const wasSafe = distFromPrevTarget <= WEEKLY_TOLERANCE;
             if (wasSafe) {
                 target = prevData.target + rate;
@@ -293,7 +293,6 @@ export default function App() {
                 weekLabel: w.weekLabel,
                 actual: w.actual,
                 target: w.target,
-                // FIX: Removed duplicate properties. Uses strict weekly tolerance.
                 targetUpper: w.target + WEEKLY_TOLERANCE,
                 targetLower: w.target - WEEKLY_TOLERANCE,
             }));
@@ -506,7 +505,7 @@ export default function App() {
 
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             // FIX: Check deviation against the CALCULATED bounds for this specific point
+             // Check deviation against the CALCULATED bounds for this specific point
              const isOffTrack = d.actual > d.targetUpper || d.actual < d.targetLower;
              const r = mode === 'daily' ? (isOffTrack ? 2.5 : 2) : (isOffTrack ? 3 : 4);
              
@@ -604,8 +603,8 @@ export default function App() {
                     <div className="flex justify-between items-end mb-3 px-1 flex-wrap gap-2">
                         <div>
                             <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                            {/* FIX: Use correct constant name WEEKLY_TOLERANCE */}
-                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{WEEKLY_TOLERANCE}kg</p>
+                            {/* UPDATED: Dynamic Label based on Mode */}
+                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{chartMode === 'weekly' ? WEEKLY_TOLERANCE : DAILY_TOLERANCE}kg</p>
                         </div>
                         
                         <div className="flex gap-2">
@@ -749,8 +748,8 @@ export default function App() {
                     <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
                         <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
                         <p className="leading-relaxed">
-                            {/* FIX: Use correct constant name WEEKLY_TOLERANCE */}
-                            The chart tunnel is ±{WEEKLY_TOLERANCE}kg to account for water weight.
+                            {/* UPDATED: Explicitly mention both tolerances */}
+                            The chart tunnel is <strong>±{WEEKLY_TOLERANCE}kg</strong> (Weekly) or <strong>±{DAILY_TOLERANCE}kg</strong> (Daily) to account for water weight.
                         </p>
                     </div>
 
