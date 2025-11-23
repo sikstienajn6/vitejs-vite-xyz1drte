@@ -830,30 +830,30 @@ export default function App() {
                 )}
 
                 <section className="flex flex-col" ref={containerRef}>
-                    <div className="flex justify-between items-end mb-2 px-1 flex-wrap gap-2">
-                        <div>
-                            <div className="flex items-center gap-2">
+                    <div className="flex justify-between items-end mb-2 px-1 gap-1">
+                        <div className="shrink-0">
+                            <div className="flex items-center gap-1">
                                 <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
                                 <button 
                                     onClick={() => setShowExplanation(!showExplanation)}
-                                    className="text-slate-500 hover:text-blue-400 transition-colors p-1"
+                                    className="text-slate-500 hover:text-blue-400 transition-colors"
                                 >
-                                    <Info size={14} />
+                                    <Info size={13} />
                                 </button>
                             </div>
-                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
+                            <p className="text-[10px] font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
                         
-                        <div className="flex gap-2">
-                             <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
-                                <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
-                                <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
-                                <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
+                        <div className="flex gap-1 shrink-0">
+                             <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
+                                <button onClick={() => setFilterRange('1M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
+                                <button onClick={() => setFilterRange('3M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
+                                <button onClick={() => setFilterRange('ALL')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
                             </div>
                             
-                            <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
-                                <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
-                                <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
+                            <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
+                                <button onClick={() => setChartMode('weekly')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
+                                <button onClick={() => setChartMode('daily')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
                             </div>
                         </div>
                     </div>
