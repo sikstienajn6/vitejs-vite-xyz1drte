@@ -161,16 +161,14 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- MEASURE WIDTH (ROBUST) ---
+  // --- MEASURE WIDTH ---
   useLayoutEffect(() => {
     if (!containerRef.current) return;
-    
     const ro = new ResizeObserver(entries => {
       for (let entry of entries) {
         setContainerWidth(entry.contentRect.width);
       }
     });
-
     ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, [view, loading]); 
@@ -535,18 +533,17 @@ export default function App() {
 
   // --- CHART COMPONENT ---
   const ChartRenderer = ({ data, mode, height, width }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number }) => {
-    // FIX: Relaxed check to allow single data point. (data.length === 0 is the only blocker)
     if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log data to see trend</p>
       </div>
     );
     
-    // Safety for initial render width
     const renderWidth = width > 0 ? width : 100;
-
     const expanded = height > SNAP_THRESHOLD;
-    const padding = { top: 10, bottom: 20, left: 16, right: 16 };
+    
+    // Padding: Left increased to accommodate Y-axis text
+    const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -566,22 +563,23 @@ export default function App() {
     const range = maxVal - minVal || 1;
 
     const availableWidth = renderWidth - padding.left - padding.right;
-    
-    // FIX: Div by zero prevention. If length is 1, denom is 1 (center it or left align)
     const count = data.length;
     const denominator = count > 1 ? count - 1 : 1;
     
     const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
-    
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
+    // --- GRID LINES CALCULATION ---
+    const gridCount = 5; // How many horizontal lines
+    const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
+
+    // --- AREA POINTS ---
     const areaPoints = [
         ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
         ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
     ].join(' ');
 
     let trendPath = '';
-    // Only generate path if we have > 1 point
     if (count > 1) {
         let lastValidT = -1;
         data.forEach((d, i) => {
@@ -598,7 +596,10 @@ export default function App() {
         });
     }
 
-    const labelInterval = Math.max(1, Math.floor(data.length / (renderWidth / 60))); 
+    // Standard interval for fallback
+    const labelInterval = Math.max(1, Math.floor(data.length / (renderWidth / 55))); 
+    const lastPointX = getX(data.length - 1);
+    const overlapThreshold = 40; // Pixels required between labels
 
     return (
       <div 
@@ -607,8 +608,26 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
           
+          {/* GRID & AXES */}
+          {/* Horizontal Grid Lines */}
+          {gridStops.map((val, idx) => (
+             <g key={idx}>
+               <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
+               {/* Y-Axis Text - Visible in Expanded Mode on Left */}
+               {expanded && (
+                   <text x={padding.left - 6} y={getY(val) + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
+               )}
+             </g>
+          ))}
+          {/* Vertical Axis Line */}
+          <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
+          {/* X-Axis Baseline */}
+          <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
+
+          {/* TUNNEL */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
+          {/* TREND LINE */}
           <defs>
             <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
                 {data.map((d, i) => {
@@ -624,34 +643,57 @@ export default function App() {
               <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
           )}
 
+          {/* DATA POINTS & LABELS */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
+             const px = getX(i);
+             const py = getY(d.actual);
+             
              return (
-                <circle 
-                    key={i}
-                    cx={getX(i)} 
-                    cy={getY(d.actual)} 
-                    r={expanded ? 3 : 2} 
-                    fill="#94a3b8" 
-                    opacity="0.6"
-                />
+                <g key={i}>
+                    <circle 
+                        cx={px} 
+                        cy={py} 
+                        r={expanded ? 3.5 : 2} 
+                        fill="#94a3b8" 
+                        opacity={expanded ? "0.9" : "0.6"}
+                    />
+                    {/* Floating Weight Label (Expanded Mode) */}
+                    {expanded && (
+                        <text x={px} y={py - 12} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
+                            {d.actual.toFixed(1)}
+                        </text>
+                    )}
+                </g>
              );
           })}
 
+          {/* X-AXIS LABELS (Collision Corrected) */}
           {data.map((d, i) => {
-             if (i % labelInterval !== 0 && i !== data.length - 1) return null;
-             
+             const xPos = getX(i);
+             let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
-             let xPos = getX(i);
-             
+
+             // 1. Always Render First
              if (i === 0) {
+                 shouldRender = true;
                  anchor = "start";
-                 xPos -= 6;
              }
-             if (i === data.length - 1) {
+             // 2. Always Render Last
+             else if (i === data.length - 1) {
+                 shouldRender = true;
                  anchor = "end";
-                 xPos += 6;
              }
+             // 3. Render Intermediates based on distance
+             else if (i % labelInterval === 0) {
+                 // COLLISION CHECK: Is this point too close to the Last Point?
+                 const distToEnd = lastPointX - xPos;
+                 if (distToEnd > overlapThreshold) {
+                     shouldRender = true;
+                 }
+             }
+
+             if (!shouldRender) return null;
 
              return (
                 <text key={i} x={xPos} y={height - 6} fontSize="10" fill="#64748b" textAnchor={anchor} fontWeight="bold">
