@@ -58,7 +58,7 @@ const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
 
-// Height Constants for Snap Logic
+// Height Constants
 const HEIGHT_COMPRESSED = 250;
 const HEIGHT_EXPANDED = 450;
 const SNAP_THRESHOLD = (HEIGHT_EXPANDED + HEIGHT_COMPRESSED) / 2;
@@ -161,21 +161,19 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- MEASURE WIDTH ---
+  // --- MEASURE WIDTH (ROBUST) ---
   useLayoutEffect(() => {
-    const updateWidth = () => {
-        if (containerRef.current) {
-            setContainerWidth(containerRef.current.offsetWidth);
-        }
-    };
+    if (!containerRef.current) return;
     
-    // Initial measure
-    updateWidth();
-    
-    // Listen for resize
-    window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
-  }, [view]); // Recalc if view changes
+    const ro = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        setContainerWidth(entry.contentRect.width);
+      }
+    });
+
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, [view, loading]); 
 
   const handleGoogleLogin = async () => {
     try {
@@ -482,7 +480,7 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  // --- DRAG & SNAP LOGIC (PHYSICS) ---
+  // --- DRAG & SNAP LOGIC ---
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -503,14 +501,12 @@ export default function App() {
   const handleDragMove = (e: MouseEvent | TouchEvent) => {
     if (!isDraggingRef.current) return;
     
-    // STRICT PREVENT: Stops browser from scrolling/bouncing while resizing
     if (e.cancelable) e.preventDefault();
     if (e.type === 'touchmove') e.stopImmediatePropagation();
 
     const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
     const delta = clientY - startYRef.current;
     
-    // 1:1 Follow
     const newHeight = Math.max(HEIGHT_COMPRESSED, Math.min(HEIGHT_EXPANDED, startHeightRef.current + delta));
     setChartHeight(newHeight);
   };
@@ -520,7 +516,6 @@ export default function App() {
     setIsDragging(false);
     document.body.style.userSelect = '';
     
-    // Snap Logic
     setChartHeight(prev => {
         if (prev > SNAP_THRESHOLD) return HEIGHT_EXPANDED;
         return HEIGHT_COMPRESSED;
@@ -540,15 +535,17 @@ export default function App() {
 
   // --- CHART COMPONENT ---
   const ChartRenderer = ({ data, mode, height, width }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number }) => {
-    if (!data || data.length < 2 || width === 0) return (
+    // FIX: Relaxed check to allow single data point. (data.length === 0 is the only blocker)
+    if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
-        <p className="text-sm">Log more data to see trend</p>
+        <p className="text-sm">Log data to see trend</p>
       </div>
     );
+    
+    // Safety for initial render width
+    const renderWidth = width > 0 ? width : 100;
 
     const expanded = height > SNAP_THRESHOLD;
-    
-    // MARGINS: Add 16px side padding to X-axis to prevent label/dot cutoff
     const padding = { top: 10, bottom: 20, left: 16, right: 16 };
 
     const validValues = data.flatMap(d => {
@@ -562,15 +559,19 @@ export default function App() {
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
-    const buffer = rawRange * 0.05; // 5% buffer top/bottom
+    const buffer = rawRange * 0.05; 
     
     const minVal = rawMin - buffer;
     const maxVal = rawMax + buffer;
     const range = maxVal - minVal || 1;
 
-    // X Calculation maps to 0...width with explicit padding
-    const availableWidth = width - padding.left - padding.right;
-    const getX = (i: number) => padding.left + (i / (data.length - 1)) * availableWidth;
+    const availableWidth = renderWidth - padding.left - padding.right;
+    
+    // FIX: Div by zero prevention. If length is 1, denom is 1 (center it or left align)
+    const count = data.length;
+    const denominator = count > 1 ? count - 1 : 1;
+    
+    const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
     
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
@@ -580,49 +581,49 @@ export default function App() {
     ].join(' ');
 
     let trendPath = '';
-    let lastValidT = -1;
-    data.forEach((d, i) => {
-        if (d.trend === null) return;
-        const x = getX(i);
-        const y = getY(d.trend);
-        if (lastValidT === -1) trendPath += `M ${x},${y} `;
-        else {
-            const distance = i - lastValidT;
-            if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
-            else trendPath += `L ${x},${y} `; 
-        }
-        lastValidT = i;
-    });
+    // Only generate path if we have > 1 point
+    if (count > 1) {
+        let lastValidT = -1;
+        data.forEach((d, i) => {
+            if (d.trend === null) return;
+            const x = getX(i);
+            const y = getY(d.trend);
+            if (lastValidT === -1) trendPath += `M ${x},${y} `;
+            else {
+                const distance = i - lastValidT;
+                if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
+                else trendPath += `L ${x},${y} `; 
+            }
+            lastValidT = i;
+        });
+    }
 
-    // Smart label interval
-    const labelInterval = Math.max(1, Math.floor(data.length / (width / 60))); 
+    const labelInterval = Math.max(1, Math.floor(data.length / (renderWidth / 60))); 
 
     return (
       <div 
         className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
         style={{height: height}}
       >
-        {/* EXACT PIXEL VIEWBOX = 1:1 Rendering (No distortion) */}
-        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
+        <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
           
-          {/* Tunnel (Full Width) */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
-          {/* Gradient Trend Line (Green Inside / Red Outside) */}
           <defs>
             <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
                 {data.map((d, i) => {
                     if (d.trend === null) return null;
-                    const offset = (i / (data.length - 1)) * 100;
-                    // LOGIC: Red if outside, Green if inside
+                    const offset = (i / denominator) * 100;
                     const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
                     return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#10b981"} />;
                 })}
             </linearGradient>
           </defs>
-          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
+          
+          {count > 1 && (
+              <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
+          )}
 
-          {/* Data Dots (Neutral Grey) */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
              return (
@@ -637,21 +638,19 @@ export default function App() {
              );
           })}
 
-          {/* X-Axis Labels */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              
              let anchor: "start" | "middle" | "end" = "middle";
              let xPos = getX(i);
              
-             // Dynamic anchors to prevent edge cutoff
              if (i === 0) {
                  anchor = "start";
-                 xPos -= 6; // Pull back slightly towards left edge of padding
+                 xPos -= 6;
              }
              if (i === data.length - 1) {
                  anchor = "end";
-                 xPos += 6; // Push forward slightly towards right edge of padding
+                 xPos += 6;
              }
 
              return (
@@ -752,10 +751,8 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* Chart Container - Passes Width */}
                     <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} />
                     
-                    {/* Drag Handle - Added touch-action: none to CSS style to prevent scroll */}
                     <div 
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
                         style={{ touchAction: 'none' }} 
