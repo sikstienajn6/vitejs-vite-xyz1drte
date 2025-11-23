@@ -33,8 +33,6 @@ import {
   LogOut,
   LogIn,
   AlertCircle,
-  Maximize2,
-  Minimize2,
   Info
 } from 'lucide-react';
 
@@ -513,8 +511,11 @@ export default function App() {
     window.removeEventListener('touchend', handleDragEnd);
   };
 
+  // Click to toggle (as fallback)
   const toggleExpand = () => {
-      setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
+      if (!isDraggingRef.current) {
+          setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
+      }
   };
 
   // --- CHART COMPONENT ---
@@ -526,8 +527,9 @@ export default function App() {
     );
 
     const width = 600; 
-    // Tightened margins for max vertical space
-    const padding = { top: 20, bottom: 30, left: 40, right: 20 };
+    const expanded = height > SNAP_THRESHOLD;
+    // Margins
+    const padding = { top: 20, bottom: 30, left: expanded ? 40 : 30, right: 20 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -537,7 +539,7 @@ export default function App() {
         return vals;
     });
     
-    // Smart Ranging: Add 5% buffer instead of fixed kg amount to ensure filling
+    // Smart Ranging: 5% buffer
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
@@ -573,19 +575,19 @@ export default function App() {
     const labelInterval = Math.ceil(data.length / (width / 60)); 
 
     return (
-      // Applied transition class conditionally based on dragging state
       <div 
         className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
         style={{height: height}}
       >
-        {/* Click to toggle explanation */}
+        {/* Click chart area toggles explanation */}
         <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer">
+          
           {/* Grid */}
           <line x1={padding.left} y1={getY(minVal)} x2={width-padding.right} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding.left} y1={getY(maxVal)} x2={width-padding.right} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Labels - Only show if expanded enough to fit comfortably */}
-          {height > 300 && (
+          {/* Y-Axis Labels */}
+          {expanded && (
               <>
                 <text x={padding.left - 8} y={getY(minVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
                 <text x={padding.left - 8} y={getY(maxVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
@@ -606,12 +608,11 @@ export default function App() {
                 })}
             </linearGradient>
           </defs>
-          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={height > 300 ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
+          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
 
           {/* Data Dots */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             // Red ONLY if this specific dot is out of bounds
              const isDotOff = d.actual > d.targetUpper || d.actual < d.targetLower;
              
              return (
@@ -619,10 +620,15 @@ export default function App() {
                     <circle 
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
-                        r={height > 300 ? 3 : 2.5} 
+                        r={expanded ? 3 : 2.5} 
                         fill={isDotOff ? "#ef4444" : "#94a3b8"} 
                         opacity={isDotOff ? "0.9" : "0.4"}
                     />
+                    {expanded && (
+                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
+                            {d.actual.toFixed(1)}
+                        </text>
+                    )}
                 </g>
              );
           })}
@@ -757,7 +763,7 @@ export default function App() {
                             className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg touch-none"
                             onMouseDown={handleDragStart}
                             onTouchStart={handleDragStart}
-                            onClick={toggleExpand} // Fallback click
+                            onClick={toggleExpand}
                         >
                             <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
                         </div>
