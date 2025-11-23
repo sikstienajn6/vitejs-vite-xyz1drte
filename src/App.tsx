@@ -32,7 +32,9 @@ import {
   Clock,
   LogOut,
   LogIn,
-  AlertCircle
+  AlertCircle,
+  Maximize2,
+  X
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -51,12 +53,10 @@ const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
-const WEEKLY_TOLERANCE = 0.3; // Strict: Averaging removes noise
-const DAILY_TOLERANCE = 0.8;  // Wide: Accounts for water/gut/glycogen noise
-
+const TARGET_TOLERANCE = 0.2; // Strict tolerance for the Trend Line
+const EMA_ALPHA = 0.1; // Smoothing factor (0.1 = 10% of new reading, 90% of history)
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
-const BREAK_LINE_THRESHOLD_DAYS = 7; 
 
 // --- Types ---
 interface WeightEntry {
@@ -74,20 +74,19 @@ interface SettingsData {
 interface WeeklySummary {
   weekId: string;
   weekLabel: string;
-  actual: number;
+  actual: number; // This is now Trend Average
+  rawAvg: number; // This is Scale Average
   count: number;
   entries: WeightEntry[];
   target: number;
-  targetUpper: number; 
-  targetLower: number; 
   delta: number;
   hasPrev: boolean;
-  inTunnel: boolean; 
 }
 
 interface ChartPoint {
     label: string; 
-    actual: number | null; 
+    actual: number | null; // Raw Scale Weight
+    trend: number | null;  // Calculated Trend Weight
     target: number;
     targetUpper: number;
     targetLower: number;
@@ -131,6 +130,7 @@ export default function App() {
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
+  const [isChartExpanded, setIsChartExpanded] = useState(false);
   
   // Rate Inputs
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
@@ -200,10 +200,31 @@ export default function App() {
     };
   }, [user]);
 
-  // --- CALCULATIONS ---
-  const weeklyData = useMemo<WeeklySummary[]>(() => {
-    if (weights.length === 0 || !settings) return [];
+  // --- CALCULATIONS: Trend Engine ---
+  const { weeklyData, trendMap, currentTrendRate } = useMemo(() => {
+    if (weights.length === 0 || !settings) {
+        return { weeklyData: [], trendMap: new Map(), currentTrendRate: 0 };
+    }
 
+    // 1. Sort weights ascending
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+    
+    // 2. Calculate Trend (EMA)
+    // We use a map to store calculated trend for every date
+    const tMap = new Map<string, number>();
+    let currentTrend = sortedWeights[0].weight; // Initialize with first weighing
+
+    // To be statistically accurate, we should iterate day by day, 
+    // but for a weight app, iterating entry by entry is standard practice 
+    // if we assume "Carried Forward" for missing days.
+    // Let's iterate ENTRY by ENTRY for the EMA calculation.
+    sortedWeights.forEach((entry) => {
+        // EMA Formula: NewTrend = PrevTrend + alpha * (Actual - PrevTrend)
+        currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
+        tMap.set(entry.date, currentTrend);
+    });
+
+    // 3. Group by Week
     const groups: Record<string, WeightEntry[]> = {};
     weights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
@@ -211,57 +232,78 @@ export default function App() {
       groups[weekKey].push(entry);
     });
 
-    let processedRaw = Object.keys(groups).sort().map((weekKey) => {
+    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+    
+    let processedWeeks = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
-      const avg = valSum / entries.length;
+      const rawAvg = valSum / entries.length;
+      
+      // Calculate average TREND for the week (smoother)
+      const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
+      const trendAvg = trendSum / entries.length;
+
       const earliestDate = entries[entries.length - 1].date; 
-      return { weekKey, avg, earliestDate, entries };
+
+      return {
+        weekId: weekKey,
+        weekLabel: formatDate(earliestDate),
+        actual: trendAvg, // We now track the TREND Average
+        rawAvg: rawAvg,
+        count: entries.length,
+        entries: entries,
+        target: 0, 
+        delta: 0,
+        hasPrev: false
+      };
     });
 
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-    const result: WeeklySummary[] = [];
-
-    for (let i = 0; i < processedRaw.length; i++) {
-        const current = processedRaw[i];
-        const prevData = i > 0 ? result[i-1] : null;
-        
-        let target = current.avg;
-
-        if (prevData) {
-            const distFromPrevTarget = Math.abs(prevData.actual - prevData.target);
-            // Weekly logic uses strict tolerance
-            const wasSafe = distFromPrevTarget <= WEEKLY_TOLERANCE;
-            if (wasSafe) {
-                target = prevData.target + rate;
+    // 4. Set Targets based on Trend
+    for (let i = 0; i < processedWeeks.length; i++) {
+        if (i === 0) {
+            processedWeeks[i].target = processedWeeks[i].actual;
+        } else {
+            const prev = processedWeeks[i-1];
+            const dist = Math.abs(prev.actual - prev.target);
+            
+            // If Trend was within tolerance, continue path
+            if (dist <= TARGET_TOLERANCE) {
+                processedWeeks[i].target = prev.target + rate;
             } else {
-                target = prevData.actual + rate;
+                // Reset anchor
+                processedWeeks[i].target = prev.actual + rate;
             }
+            
+            processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
+            processedWeeks[i].hasPrev = true;
         }
-
-        result.push({
-            weekId: current.weekKey,
-            weekLabel: formatDate(current.earliestDate),
-            actual: current.avg,
-            count: current.entries.length,
-            entries: current.entries,
-            target: target,
-            targetUpper: target + WEEKLY_TOLERANCE,
-            targetLower: target - WEEKLY_TOLERANCE,
-            delta: prevData ? current.avg - prevData.actual : 0,
-            hasPrev: !!prevData,
-            inTunnel: Math.abs(current.avg - target) <= WEEKLY_TOLERANCE
-        });
     }
 
-    return result;
+    // 5. Calculate Current Rate (7 Day Slope of Trend)
+    // Find trend today (or last entry) vs trend ~7 days ago
+    const lastEntry = sortedWeights[sortedWeights.length - 1];
+    const lastTrend = tMap.get(lastEntry.date) || 0;
+    
+    // Find entry closest to 7 days ago
+    const sevenDaysAgo = new Date(lastEntry.date);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sdaString = sevenDaysAgo.toISOString().split('T')[0];
+    
+    // Find closest weight entry before or on that date
+    let prevTrend = lastTrend; 
+    // Simple search backwards
+    for(let i = sortedWeights.length - 2; i >= 0; i--) {
+        if (sortedWeights[i].date <= sdaString) {
+            prevTrend = tMap.get(sortedWeights[i].date) || 0;
+            break;
+        }
+    }
+    
+    const currentRate = lastTrend - prevTrend;
+
+    return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
 
-  const currentWeeklyDiff = useMemo(() => {
-    if (weeklyData.length < 2) return 0;
-    const last = weeklyData[weeklyData.length - 1];
-    return last.delta;
-  }, [weeklyData]);
 
   // --- CHART DATA PREP ---
   const finalChartData = useMemo<ChartPoint[]>(() => {
@@ -291,10 +333,11 @@ export default function App() {
             .map(w => ({
                 label: w.weekId, 
                 weekLabel: w.weekLabel,
-                actual: w.actual,
+                actual: w.rawAvg, // Show RAW avg as dot
+                trend: w.actual,  // Show Trend avg as line
                 target: w.target,
-                targetUpper: w.target + WEEKLY_TOLERANCE,
-                targetLower: w.target - WEEKLY_TOLERANCE,
+                targetUpper: w.target + TARGET_TOLERANCE,
+                targetLower: w.target - TARGET_TOLERANCE,
             }));
     } 
     
@@ -321,17 +364,24 @@ export default function App() {
                 targetFound = true;
             }
 
+            // Get Trend from map if exists, or linear interpolate? 
+            // For simplicity in gaps, we won't render the trend line on gaps, 
+            // OR we can carry forward the last known trend. 
+            // Let's try to find the nearest trend value for visualization if needed, 
+            // but `trendMap` only has values on days with weights.
+            // Visualizing trend only on days with data is safer.
+            
             return {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
+                trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
                 target: targetFound ? dailyTarget : 0,
-                // Uses WIDER tolerance for daily view
-                targetUpper: targetFound ? dailyTarget + DAILY_TOLERANCE : 0,
-                targetLower: targetFound ? dailyTarget - DAILY_TOLERANCE : 0,
+                targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
+                targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
             };
         }).filter(p => p.target !== 0); 
     }
-  }, [weeklyData, weights, chartMode, settings, filterRange]);
+  }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
 
   // --- ACTIONS ---
   const resetSettingsForm = () => {
@@ -354,10 +404,8 @@ export default function App() {
     const sanitizedVal = val.replace(',', '.');
     if (sanitizedVal === '') { setWeeklyRate(''); setMonthlyRate(''); return; }
     if (sanitizedVal === '.') { type === 'weekly' ? setWeeklyRate('.') : setMonthlyRate('.'); return; }
-    
     const num = parseFloat(sanitizedVal);
     if (isNaN(num)) { type === 'weekly' ? setWeeklyRate(sanitizedVal) : setMonthlyRate(sanitizedVal); return; }
-
     if (type === 'weekly') {
         setWeeklyRate(sanitizedVal);
         setMonthlyRate((num * 4.345).toFixed(2));
@@ -421,107 +469,113 @@ export default function App() {
     );
   };
 
-  const getRateAdherenceColor = (actualDelta: number) => {
+  const getRateAdherenceColor = (rate: number) => {
     if (!settings) return 'text-slate-500';
     const targetRate = settings.weeklyRate;
-    const deviation = Math.abs(actualDelta - targetRate);
+    const deviation = Math.abs(rate - targetRate);
     if (deviation <= RATE_TOLERANCE_GREEN) return 'text-emerald-400';
     if (deviation <= RATE_TOLERANCE_ORANGE) return 'text-amber-400';
     return 'text-rose-400'; 
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode }: { data: ChartPoint[], mode: 'weekly' | 'daily' }) => {
+  const ChartRenderer = ({ data, mode, expanded }: { data: ChartPoint[], mode: 'weekly' | 'daily', expanded: boolean }) => {
     if (!data || data.length < 2) return (
       <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
         <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
-    const height = 220;
+    const height = expanded ? 400 : 220;
     const width = 600; 
-    const padding = 30;
-    const marginBottom = 20; 
+    const padding = expanded ? 50 : 30;
+    const marginBottom = 30; 
 
-    const validActuals = data.map(d => d.actual).filter(v => v !== null) as number[];
-    const allValues = [...validActuals, ...data.map(d => d.targetUpper), ...data.map(d => d.targetLower)];
-    const minVal = Math.min(...allValues) - 0.2;
-    const maxVal = Math.max(...allValues) + 0.2;
+    // Min/Max based on Trend and Actuals
+    const validValues = data.flatMap(d => {
+        const vals = [];
+        if (d.actual !== null) vals.push(d.actual);
+        if (d.trend !== null) vals.push(d.trend);
+        vals.push(d.targetUpper, d.targetLower);
+        return vals;
+    });
+    
+    const minVal = Math.min(...validValues) - 0.2;
+    const maxVal = Math.max(...validValues) + 0.2;
     const range = maxVal - minVal || 1;
 
     const getX = (i: number) => padding + (i / (data.length - 1)) * (width - 2 * padding);
     const getY = (val: number) => (height - marginBottom) - padding - ((val - minVal) / range) * ((height - marginBottom) - 2 * padding);
 
-    // Tunnel Path (Continuous)
-    const targetPath = data.map((d, i) => `${i===0?'M':'L'} ${getX(i)},${getY(d.target)}`).join(' ');
+    // 1. Tunnel (Continuous)
     const areaPoints = [
         ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
         ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
     ].join(' ');
 
-    // Actual Line Path (Smart Breaking)
-    let actualPath = '';
-    let lastValidIndex = -1;
-
+    // 2. Trend Line (Signal) - Connects valid points
+    let trendPath = '';
+    let lastValidT = -1;
     data.forEach((d, i) => {
-        if (d.actual === null) return; 
-        
+        if (d.trend === null) return;
         const x = getX(i);
-        const y = getY(d.actual);
-
-        if (lastValidIndex === -1) {
-            actualPath += `M ${x},${y} `;
-        } else {
-            const distance = i - lastValidIndex;
-            if (distance >= BREAK_LINE_THRESHOLD_DAYS) {
-                actualPath += `M ${x},${y} `;
-            } else {
-                actualPath += `L ${x},${y} `;
-            }
-        }
-        lastValidIndex = i;
+        const y = getY(d.trend);
+        if (lastValidT === -1) trendPath += `M ${x},${y} `;
+        // We bridge gaps for trend line to show continuity of body mass
+        else trendPath += `L ${x},${y} `; 
+        lastValidT = i;
     });
 
-    const labelInterval = Math.ceil(data.length / 6);
+    const labelInterval = Math.ceil(data.length / (expanded ? 10 : 6));
 
     return (
-      <div className="w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm">
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+      <div className={`w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm ${expanded ? 'h-full' : ''}`}>
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+          {/* Grid */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
-          <path d={targetPath} fill="none" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1" strokeDasharray="4,4" />
-          
-          <path 
-            d={actualPath} 
-            fill="none" 
-            stroke="#3b82f6" 
-            strokeWidth={mode === 'daily' ? "1.5" : "3"} 
-            strokeLinecap="round" 
-            strokeLinejoin="round" 
-            opacity={mode === 'daily' ? "0.6" : "1"}
-          />
+          {/* Y Axis Labels (Expanded) */}
+          {expanded && (
+              <>
+                <text x={padding - 10} y={getY(minVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
+                <text x={padding - 10} y={getY(maxVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
+                <text x={padding - 10} y={getY((minVal+maxVal)/2)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{((minVal+maxVal)/2).toFixed(1)}</text>
+              </>
+          )}
 
+          {/* Tunnel */}
+          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
+          
+          {/* Trend Line (Solid Blue) */}
+          <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+
+          {/* Raw Data Dots (Faint/Ghost) */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             // Check deviation against the CALCULATED bounds for this specific point
-             const isOffTrack = d.actual > d.targetUpper || d.actual < d.targetLower;
-             const r = mode === 'daily' ? (isOffTrack ? 2.5 : 2) : (isOffTrack ? 3 : 4);
+             // Color based on TREND deviation, not raw deviation
+             const isTrendOff = d.trend ? (d.trend > d.targetUpper || d.trend < d.targetLower) : false;
              
              return (
-                <circle 
-                    key={i} 
-                    cx={getX(i)} 
-                    cy={getY(d.actual)} 
-                    r={r} 
-                    fill={isOffTrack ? "#ef4444" : "#3b82f6"} 
-                    stroke={mode === 'daily' ? 'none' : (isOffTrack ? "#ef4444" : "#0f172a")}
-                    strokeWidth="2" 
-                />
+                <g key={i}>
+                    <circle 
+                        cx={getX(i)} 
+                        cy={getY(d.actual)} 
+                        r={expanded ? 3 : 2} 
+                        fill="#94a3b8" 
+                        opacity="0.5"
+                    />
+                    {/* Expanded: Value Label above dot */}
+                    {expanded && (
+                        <text x={getX(i)} y={getY(d.actual) - 8} fontSize="10" fill="#cbd5e1" textAnchor="middle">
+                            {d.actual.toFixed(1)}
+                        </text>
+                    )}
+                </g>
              );
           })}
 
+          {/* X Axis Labels */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
@@ -535,6 +589,7 @@ export default function App() {
     );
   };
 
+  // --- RENDER LOADING ---
   if (loading) return (
     <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50 overflow-hidden">
         <div className="text-blue-500 animate-pulse font-bold text-lg flex items-center gap-3">
@@ -562,6 +617,24 @@ export default function App() {
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
+      {/* EXPANDED CHART MODAL */}
+      {isChartExpanded && (
+          <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col p-4 animate-in fade-in duration-200">
+              <div className="flex justify-between items-center mb-4 shrink-0">
+                  <h2 className="text-lg font-bold text-white">Detailed Trend Analysis</h2>
+                  <button onClick={() => setIsChartExpanded(false)} className="p-2 bg-slate-800 rounded-full text-white">
+                      <X size={24} />
+                  </button>
+              </div>
+              <div className="flex-1 min-h-0">
+                  <ChartRenderer data={finalChartData} mode={chartMode} expanded={true} />
+              </div>
+              <div className="mt-4 shrink-0 text-center text-sm text-slate-500">
+                  Blue Line: Trend Weight (Signal) • Grey Dots: Scale Weight (Noise)
+              </div>
+          </div>
+      )}
+
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
         <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
         <div className="flex gap-2">
@@ -584,17 +657,17 @@ export default function App() {
             <>
                 <div className="grid grid-cols-2 gap-3">
                     <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Avg</p>
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Trend Weight</p>
                         <p className="text-2xl font-bold text-white truncate">
                         {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
                         <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
                         </p>
                     </div>
                     <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Last Week Rate</p>
-                        <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentWeeklyDiff)}`}>
-                        {currentWeeklyDiff > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                        {Math.abs(currentWeeklyDiff).toFixed(2)} kg
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Rate</p>
+                        <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentTrendRate)}`}>
+                        {currentTrendRate > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                        {Math.abs(currentTrendRate).toFixed(2)} kg
                         </div>
                     </div>
                 </div>
@@ -602,9 +675,13 @@ export default function App() {
                 <section>
                     <div className="flex justify-between items-end mb-3 px-1 flex-wrap gap-2">
                         <div>
-                            <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                            {/* UPDATED: Dynamic Label based on Mode */}
-                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{chartMode === 'weekly' ? WEEKLY_TOLERANCE : DAILY_TOLERANCE}kg</p>
+                            <div className="flex items-center gap-2">
+                                <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
+                                <button onClick={() => setIsChartExpanded(true)} className="text-blue-400 hover:text-blue-300">
+                                    <Maximize2 size={14} />
+                                </button>
+                            </div>
+                            <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
                         
                         <div className="flex gap-2">
@@ -620,7 +697,7 @@ export default function App() {
                             </div>
                         </div>
                     </div>
-                    <ChartRenderer data={finalChartData} mode={chartMode}/>
+                    <ChartRenderer data={finalChartData} mode={chartMode} expanded={false}/>
                 </section>
 
                 <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
@@ -647,7 +724,7 @@ export default function App() {
                     <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
                         <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
                         <div>Week</div>
-                        <div className="text-right">Avg</div>
+                        <div className="text-right">Trend</div>
                         <div className="text-right pr-4">Δ</div> 
                         <div className="w-5"></div>
                         </div>
@@ -672,7 +749,7 @@ export default function App() {
                                 <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
                                     <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
                                         <span>Daily Entries</span>
-                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Road: On Track' : 'Road: Deviated'}</span>
+                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Trend: On Track' : 'Trend: Deviated'}</span>
                                     </div>
                                     <div className="space-y-2">
                                     {item.entries.map((entry) => (
@@ -748,8 +825,7 @@ export default function App() {
                     <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
                         <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
                         <p className="leading-relaxed">
-                            {/* UPDATED: Explicitly mention both tolerances */}
-                            The chart tunnel is <strong>±{WEEKLY_TOLERANCE}kg</strong> (Weekly) or <strong>±{DAILY_TOLERANCE}kg</strong> (Daily) to account for water weight.
+                            The chart tunnel is ±{TARGET_TOLERANCE}kg tolerance from your smoothed Trend Weight.
                         </p>
                     </div>
 
