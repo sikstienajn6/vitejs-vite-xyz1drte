@@ -29,7 +29,6 @@ import {
   ChevronRight,
   Activity,
   Calendar,
-  Target,
   Clock,
   LogOut,
   LogIn,
@@ -253,7 +252,7 @@ export default function App() {
     return last.delta;
   }, [weeklyData]);
 
-  // --- CHART DATA PREP (Gaps & Filters) ---
+  // --- CHART DATA PREP ---
   const finalChartData = useMemo<ChartPoint[]>(() => {
     if (weeklyData.length === 0 || !settings) return [];
 
@@ -275,7 +274,7 @@ export default function App() {
         rawPoints = weeklyData
             .filter(w => new Date(w.entries[0].date) >= cutoffDate)
             .map(w => ({
-                label: w.weekId, // Use ID for gap sorting
+                label: w.weekId, 
                 weekLabel: w.weekLabel,
                 actual: w.actual,
                 target: w.target,
@@ -288,7 +287,6 @@ export default function App() {
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         
-        // Filter weights first
         const filteredWeights = weights
             .filter(e => new Date(e.date) >= cutoffDate)
             .sort((a, b) => a.date.localeCompare(b.date));
@@ -307,7 +305,7 @@ export default function App() {
             }
 
             return {
-                label: entry.date, // Use YYYY-MM-DD for sorting
+                label: entry.date, 
                 actual: entry.weight,
                 target: dailyTarget,
                 targetUpper: dailyTarget + TUNNEL_TOLERANCE,
@@ -329,14 +327,12 @@ export default function App() {
             const prev = rawPoints[i-1];
             
             if (chartMode === 'daily') {
-                // Check for missing days
                 const currDate = new Date(current.label);
                 const prevDate = new Date(prev.label);
                 const diffTime = Math.abs(currDate.getTime() - prevDate.getTime());
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
 
                 if (diffDays > 1) {
-                    // Inject Gap
                     processed.push({
                         label: 'gap',
                         actual: null,
@@ -347,23 +343,12 @@ export default function App() {
                     });
                 }
             } else {
-                 // Weekly Gap Detection (Check if week numbers are sequential)
-                 // Simple check: diff in ISO string > 1 week?
-                 // A better way is parsing the "2025-W12" format, but for simplicity:
-                 // If filtered weights are sparse, we assume gaps.
-                 // Actually, let's stick to a simple logic: If the gap > 1 item index in the original FULL array?
-                 // Easier: Just check current vs previous ID string. 
-                 // If "2025-W10" follows "2025-W08", inject gap.
-                 const currParts = current.label.split('-W'); // 2025, 10
-                 const prevParts = prev.label.split('-W');    // 2025, 08
-                 
+                 const currParts = current.label.split('-W');
+                 const prevParts = prev.label.split('-W');
                  if (currParts[0] === prevParts[0]) {
                     const diff = parseInt(currParts[1]) - parseInt(prevParts[1]);
-                    if (diff > 1) {
-                         processed.push({ ...current, actual: null, isGap: true });
-                    }
+                    if (diff > 1) processed.push({ ...current, actual: null, isGap: true });
                  } else {
-                     // Different years, just inject gap to be safe
                      processed.push({ ...current, actual: null, isGap: true });
                  }
             }
@@ -396,7 +381,6 @@ export default function App() {
 
   const handleRateChange = (val: string, type: 'weekly' | 'monthly') => {
     const sanitizedVal = val.replace(',', '.');
-    
     if (sanitizedVal === '') {
         setWeeklyRate('');
         setMonthlyRate('');
@@ -407,14 +391,12 @@ export default function App() {
         else setMonthlyRate('.');
         return;
     }
-
     const num = parseFloat(sanitizedVal);
     if (isNaN(num)) {
         if (type === 'weekly') setWeeklyRate(sanitizedVal);
         else setMonthlyRate(sanitizedVal);
         return; 
     }
-
     if (type === 'weekly') {
         setWeeklyRate(sanitizedVal);
         setMonthlyRate((num * 4.345).toFixed(2));
@@ -490,7 +472,7 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  // --- CHART COMPONENT (Handle Gaps) ---
+  // --- CHART COMPONENT ---
   const ChartRenderer = ({ data, mode }: { data: ChartPoint[], mode: 'weekly' | 'daily' }) => {
     if (!data || data.length < 2) return (
       <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
@@ -503,7 +485,6 @@ export default function App() {
     const padding = 30;
     const marginBottom = 20; 
 
-    // Calculate Min/Max ignoring Nulls
     const allValues = data.flatMap(d => d.actual !== null ? [d.actual, d.targetUpper!, d.targetLower!] : []);
     const minVal = Math.min(...allValues) - 0.2;
     const maxVal = Math.max(...allValues) + 0.2;
@@ -512,38 +493,26 @@ export default function App() {
     const getX = (i: number) => padding + (i / (data.length - 1)) * (width - 2 * padding);
     const getY = (val: number) => (height - marginBottom) - padding - ((val - minVal) / range) * ((height - marginBottom) - 2 * padding);
 
-    // GENERATE PATHS WITH BREAKS (M vs L)
+    // Generate Paths
     let actualPath = '';
     let targetPath = '';
-    let areaPathTop = '';
-    let areaPathBottom = '';
     
     data.forEach((d, i) => {
-        if (d.isGap || d.actual === null) {
-            // Gap detected? Next point must be a Move (M)
-            return;
-        }
+        if (d.isGap || d.actual === null) return;
         
         const x = getX(i);
         const yActual = getY(d.actual);
         const yTarget = getY(d.target!);
-        const yTop = getY(d.targetUpper!);
-        const yBottom = getY(d.targetLower!);
-
+        
+        // Use 'M' (Move) if start of line or previous was gap, 'L' (Line) otherwise
         const cmd = (i === 0 || data[i-1].isGap) ? 'M' : 'L';
 
         actualPath += `${cmd} ${x},${yActual} `;
         targetPath += `${cmd} ${x},${yTarget} `;
-        
-        // For area, we build a simple polygon. 
-        // NOTE: Complex gap handling for polygons is hard in SVG. 
-        // Simplification: We render disjoint polygons if there is a gap.
-        // Actually, let's just use line segments for area boundaries for now or it gets very complex to close paths.
-        // Better approach: Render multiple <polygon>s if gaps exist.
     });
 
-    // Render Polygons Area (Handling Gaps)
-    const areaPolygons = [];
+    // Build Polygons for Gaps
+    const areaPolygons: any[] = [];
     let currentSegment: any[] = [];
 
     data.forEach((d, i) => {
@@ -558,7 +527,6 @@ export default function App() {
     });
     if (currentSegment.length > 0) areaPolygons.push(currentSegment);
 
-
     const labelInterval = mode === 'daily' ? Math.ceil(data.length / 6) : 1;
 
     return (
@@ -567,19 +535,17 @@ export default function App() {
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {/* Render Green Zones (Multiple Polygons if Gaps) */}
+          {/* Render Green Zones */}
           {areaPolygons.map((seg, idx) => {
               const points = [
-                  ...seg.map(p => `${p.x},${p.yTop}`),
-                  ...seg.slice().reverse().map(p => `${p.x},${p.yBottom}`)
+                  ...seg.map((p: any) => `${p.x},${p.yTop}`),
+                  ...seg.slice().reverse().map((p: any) => `${p.x},${p.yBottom}`)
               ].join(' ');
               return <polygon key={idx} points={points} fill="rgba(16, 185, 129, 0.08)" stroke="none" />;
           })}
 
-          {/* Target Line */}
           <path d={targetPath} fill="none" stroke="rgba(16, 185, 129, 0.4)" strokeWidth="1" strokeDasharray="4,4" />
           
-          {/* Actual Line */}
           <path 
             d={actualPath} 
             fill="none" 
@@ -665,7 +631,6 @@ export default function App() {
             {view === 'dashboard' && (
             <>
                 <div className="grid grid-cols-2 gap-3">
-                    {/* Stats Cards */}
                     <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
                         <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Avg</p>
                         <p className="text-2xl font-bold text-white truncate">
@@ -691,14 +656,12 @@ export default function App() {
                         </div>
                         
                         <div className="flex gap-2">
-                            {/* Range Filter */}
                              <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
                                 <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
                                 <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
                                 <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
                             </div>
                             
-                            {/* Weekly/Daily Toggle */}
                             <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
                                 <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Wk</button>
                                 <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
@@ -708,7 +671,6 @@ export default function App() {
                     <ChartRenderer data={finalChartData} mode={chartMode}/>
                 </section>
 
-                {/* Log Weight Form */}
                 <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
                     <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
                     <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
@@ -728,7 +690,6 @@ export default function App() {
                     </form>
                 </div>
 
-                {/* History Table */}
                 <section>
                     <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
                     <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
