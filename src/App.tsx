@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -33,9 +33,7 @@ import {
   LogOut,
   LogIn,
   AlertCircle,
-  Maximize2,
-  X,
-  Info
+  GripHorizontal
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -129,10 +127,13 @@ export default function App() {
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
+  
+  // Chart Configuration
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
+  const [chartHeight, setChartHeight] = useState(250); // Dynamic Height State
+  
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
-  const [isChartExpanded, setIsChartExpanded] = useState(false);
   
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
@@ -246,7 +247,7 @@ export default function App() {
         target: 0, 
         delta: 0,
         hasPrev: false,
-        inTunnel: true 
+        inTunnel: true
       };
     });
 
@@ -452,33 +453,54 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  // --- SHARED CONTROLS COMPONENT ---
-  const ChartControls = () => (
-    <div className="flex gap-2">
-        <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
-            <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
-            <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
-            <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
-        </div>
-        <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
-            <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Wk</button>
-            <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
-        </div>
-    </div>
-  );
+  // --- DRAG LOGIC ---
+  const isDraggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(0);
+
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    isDraggingRef.current = true;
+    startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    startHeightRef.current = chartHeight;
+    
+    document.body.style.userSelect = 'none'; // Prevent text selection
+    window.addEventListener('mousemove', handleDragMove);
+    window.addEventListener('mouseup', handleDragEnd);
+    window.addEventListener('touchmove', handleDragMove, { passive: false });
+    window.addEventListener('touchend', handleDragEnd);
+  };
+
+  const handleDragMove = (e: MouseEvent | TouchEvent) => {
+    if (!isDraggingRef.current) return;
+    
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const delta = clientY - startYRef.current;
+    
+    // Limit height between 200px and 600px
+    const newHeight = Math.max(200, Math.min(600, startHeightRef.current + delta));
+    setChartHeight(newHeight);
+  };
+
+  const handleDragEnd = () => {
+    isDraggingRef.current = false;
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', handleDragMove);
+    window.removeEventListener('mouseup', handleDragEnd);
+    window.removeEventListener('touchmove', handleDragMove);
+    window.removeEventListener('touchend', handleDragEnd);
+  };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, expanded }: { data: ChartPoint[], mode: 'weekly' | 'daily', expanded: boolean }) => {
+  const ChartRenderer = ({ data, mode, height }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number }) => {
     if (!data || data.length < 2) return (
-      <div className="h-48 flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800">
+      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
-    const height = expanded ? 350 : 220;
     const width = 600; 
-    const padding = expanded ? 50 : 30;
-    const marginBottom = 30; 
+    const padding = 40; // More padding for y-axis labels
+    const marginBottom = 20; 
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -511,28 +533,31 @@ export default function App() {
         lastValidT = i;
     });
 
-    const labelInterval = Math.ceil(data.length / (expanded ? 10 : 6));
+    // Calculate intervals based on density
+    const labelInterval = Math.ceil(data.length / (width / 60)); 
 
     return (
-      <div className={`w-full overflow-hidden rounded-xl bg-slate-900 border border-slate-800 shadow-sm ${expanded ? 'h-full' : ''}`}>
-        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+      <div className="w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none" style={{height: height}}>
+        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full" preserveAspectRatio="none">
+          {/* Grid */}
           <line x1={padding} y1={getY(minVal)} x2={width-padding} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
           <line x1={padding} y1={getY(maxVal)} x2={width-padding} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
           
-          {expanded && (
-              <>
-                <text x={padding - 10} y={getY(minVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
-                <text x={padding - 10} y={getY(maxVal)} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
-              </>
-          )}
-
+          {/* Y-Axis Labels (Dynamic) */}
+          <text x={padding - 8} y={getY(minVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
+          <text x={padding - 8} y={getY(maxVal)} fill="#64748b" fontSize="11" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
+          
+          {/* Tunnel */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
-          <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          
+          {/* Trend Line */}
+          <path d={trendPath} fill="none" stroke="#3b82f6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
 
+          {/* Data Dots */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
              
-             // FIX: Color dot based on if TREND is out of tunnel, regardless of where dot is
+             // RED DOT LOGIC: Dot is red if the TREND is out of bounds at this point
              const isTrendOff = d.trend ? (d.trend > d.targetUpper || d.trend < d.targetLower) : false;
              
              return (
@@ -540,19 +565,15 @@ export default function App() {
                     <circle 
                         cx={getX(i)} 
                         cy={getY(d.actual)} 
-                        r={expanded ? 3 : 2} 
+                        r={2.5} 
                         fill={isTrendOff ? "#ef4444" : "#94a3b8"} 
-                        opacity={isTrendOff ? "0.9" : "0.5"}
+                        opacity={isTrendOff ? "0.9" : "0.4"}
                     />
-                    {expanded && (
-                        <text x={getX(i)} y={getY(d.actual) - 8} fontSize="10" fill="#cbd5e1" textAnchor="middle">
-                            {d.actual.toFixed(1)}
-                        </text>
-                    )}
                 </g>
              );
           })}
 
+          {/* X-Axis Labels */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              return (
@@ -593,59 +614,6 @@ export default function App() {
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
-      {/* EXPANDED CHART MODAL */}
-      {isChartExpanded && (
-          <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col animate-in fade-in duration-200">
-              {/* Header */}
-              <div className="flex justify-between items-center p-4 border-b border-slate-800">
-                  <h2 className="text-lg font-bold text-white">Detailed Analysis</h2>
-                  <button onClick={() => setIsChartExpanded(false)} className="p-2 bg-slate-800 rounded-full text-white hover:bg-slate-700">
-                      <X size={20} />
-                  </button>
-              </div>
-              
-              {/* Controls inside Modal */}
-              <div className="p-4 flex justify-center border-b border-slate-800 bg-slate-900/50">
-                  <ChartControls />
-              </div>
-
-              {/* Chart Area */}
-              <div className="flex-1 min-h-0 p-4 flex flex-col">
-                  <ChartRenderer data={finalChartData} mode={chartMode} expanded={true} />
-                  
-                  {/* Detailed Legend / Explanation */}
-                  <div className="mt-6 space-y-4 overflow-y-auto">
-                        <div className="grid grid-cols-3 gap-2 text-xs font-bold text-center">
-                            <div className="bg-slate-900 p-2 rounded border border-blue-500/30 text-blue-400">
-                                🔵 Trend Line
-                            </div>
-                            <div className="bg-slate-900 p-2 rounded border border-emerald-500/30 text-emerald-400">
-                                🟩 Goal Tunnel
-                            </div>
-                            <div className="bg-slate-900 p-2 rounded border border-slate-700 text-slate-400">
-                                ⚪ Scale Weight
-                            </div>
-                        </div>
-
-                        <div className="bg-slate-900 p-4 rounded-xl border border-slate-800">
-                            <div className="flex items-center gap-2 text-slate-200 font-bold mb-2 text-sm">
-                                <Info size={16} className="text-blue-500" />
-                                How the Model Works
-                            </div>
-                            <p className="text-xs text-slate-400 leading-relaxed">
-                                We use an <strong>Exponential Moving Average (EMA)</strong> to calculate your true weight. 
-                                Daily scale readings fluctuate due to water, salt, and carbs (glycogen).
-                                <br/><br/>
-                                <span className="text-white">● Grey Dot:</span> Your raw scale reading (includes noise).<br/>
-                                <span className="text-red-400">● Red Dot:</span> Indicates your <strong>Trend Line</strong> has drifted outside the safety tunnel at this point.<br/>
-                                <span className="text-blue-400">● Blue Line:</span> Your calculated "True Weight". Keep this line inside the green tunnel.
-                            </p>
-                        </div>
-                  </div>
-              </div>
-          </div>
-      )}
-
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
         <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
         <div className="flex gap-2">
@@ -683,21 +651,41 @@ export default function App() {
                     </div>
                 </div>
 
-                <section>
-                    <div className="flex justify-between items-end mb-3 px-1 flex-wrap gap-2">
+                <section className="flex flex-col">
+                    {/* Chart Header Controls */}
+                    <div className="flex justify-between items-end mb-2 px-1 flex-wrap gap-2">
                         <div>
                             <div className="flex items-center gap-2">
                                 <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                                <button onClick={() => setIsChartExpanded(true)} className="text-blue-400 hover:text-blue-300">
-                                    <Maximize2 size={14} />
-                                </button>
                             </div>
                             <p className="text-xs font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
                         
-                        <ChartControls />
+                        <div className="flex gap-2">
+                             <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+                                <button onClick={() => setFilterRange('1M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
+                                <button onClick={() => setFilterRange('3M')} className={`px-2 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
+                                <button onClick={() => setFilterRange('ALL')} className={`px-2 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
+                            </div>
+                            
+                            <div className="bg-slate-800 p-1 rounded-lg flex text-[10px] font-bold">
+                                <button onClick={() => setChartMode('weekly')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Wk</button>
+                                <button onClick={() => setChartMode('daily')} className={`px-2 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
+                            </div>
+                        </div>
                     </div>
-                    <ChartRenderer data={finalChartData} mode={chartMode} expanded={false}/>
+
+                    {/* Expandable Chart Container */}
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
+                    
+                    {/* Drag Handle */}
+                    <div 
+                        className="h-6 bg-slate-900 border-x border-b border-slate-800 rounded-b-xl flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors touch-none"
+                        onMouseDown={handleDragStart}
+                        onTouchStart={handleDragStart}
+                    >
+                        <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
+                    </div>
                 </section>
 
                 <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
