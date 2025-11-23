@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -141,7 +141,11 @@ export default function App() {
   // Drag & Snap State
   const [chartHeight, setChartHeight] = useState(HEIGHT_COMPRESSED);
   const [isDragging, setIsDragging] = useState(false);
-  const [showExplanation, setShowExplanation] = useState(false); 
+  const [showExplanation, setShowExplanation] = useState(false);
+  
+  // Responsive Width State
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
   
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
@@ -156,6 +160,22 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // --- MEASURE WIDTH ---
+  useLayoutEffect(() => {
+    const updateWidth = () => {
+        if (containerRef.current) {
+            setContainerWidth(containerRef.current.offsetWidth);
+        }
+    };
+    
+    // Initial measure
+    updateWidth();
+    
+    // Listen for resize
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, [view]); // Recalc if view changes
 
   const handleGoogleLogin = async () => {
     try {
@@ -519,19 +539,17 @@ export default function App() {
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number }) => {
-    if (!data || data.length < 2) return (
+  const ChartRenderer = ({ data, mode, height, width }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number }) => {
+    if (!data || data.length < 2 || width === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log more data to see trend</p>
       </div>
     );
 
-    // FIXED: Use percentages or exact container fitting (100% width via viewBox)
-    const width = 1000; // Virtual coordinate width (high res)
     const expanded = height > SNAP_THRESHOLD;
     
-    // MARGINS: REMOVED LEFT/RIGHT PADDING to fill box
-    const padding = { top: 10, bottom: 20, left: 0, right: 0 };
+    // MARGINS: Add 16px side padding to X-axis to prevent label/dot cutoff
+    const padding = { top: 10, bottom: 20, left: 16, right: 16 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -544,14 +562,15 @@ export default function App() {
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
-    const buffer = rawRange * 0.05; // 5% buffer top/bottom only
+    const buffer = rawRange * 0.05; // 5% buffer top/bottom
     
     const minVal = rawMin - buffer;
     const maxVal = rawMax + buffer;
     const range = maxVal - minVal || 1;
 
-    // X Calculation maps 0 to width directly
-    const getX = (i: number) => (i / (data.length - 1)) * width;
+    // X Calculation maps to 0...width with explicit padding
+    const availableWidth = width - padding.left - padding.right;
+    const getX = (i: number) => padding.left + (i / (data.length - 1)) * availableWidth;
     
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
@@ -575,16 +594,16 @@ export default function App() {
         lastValidT = i;
     });
 
-    // Smart label interval to prevent overlap
-    const labelInterval = Math.max(1, Math.floor(data.length / 6)); 
+    // Smart label interval
+    const labelInterval = Math.max(1, Math.floor(data.length / (width / 60))); 
 
     return (
       <div 
         className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
         style={{height: height}}
       >
-        {/* Changed width="100%" and preserveAspectRatio="none" to STRETCH the graph completely */}
-        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
+        {/* EXACT PIXEL VIEWBOX = 1:1 Rendering (No distortion) */}
+        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
           
           {/* Tunnel (Full Width) */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
@@ -595,19 +614,17 @@ export default function App() {
                 {data.map((d, i) => {
                     if (d.trend === null) return null;
                     const offset = (i / (data.length - 1)) * 100;
-                    // LOGIC CHANGE: Red if outside, Green if inside
+                    // LOGIC: Red if outside, Green if inside
                     const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
                     return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#10b981"} />;
                 })}
             </linearGradient>
           </defs>
-          {/* vector-effect ensures line thickness stays constant even if SVG stretches */}
-          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
+          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
 
-          {/* Data Dots (Uniform Color) */}
+          {/* Data Dots (Neutral Grey) */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             // VISUAL CHANGE: No red dots. All dots are slate/grey.
              return (
                 <circle 
                     key={i}
@@ -616,24 +633,26 @@ export default function App() {
                     r={expanded ? 3 : 2} 
                     fill="#94a3b8" 
                     opacity="0.6"
-                    vectorEffect="non-scaling-stroke"
                 />
              );
           })}
 
-          {/* X-Axis Labels (Only drawn if inside visible area) */}
+          {/* X-Axis Labels */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
              
-             // FIX: Explicitly type the anchor variable to satisfy TS
              let anchor: "start" | "middle" | "end" = "middle";
-             
-             if (i === 0) anchor = "start";
-             if (i === data.length - 1) anchor = "end";
-             
              let xPos = getX(i);
-             if (i === 0) xPos += 4;
-             if (i === data.length - 1) xPos -= 4;
+             
+             // Dynamic anchors to prevent edge cutoff
+             if (i === 0) {
+                 anchor = "start";
+                 xPos -= 6; // Pull back slightly towards left edge of padding
+             }
+             if (i === data.length - 1) {
+                 anchor = "end";
+                 xPos += 6; // Push forward slightly towards right edge of padding
+             }
 
              return (
                 <text key={i} x={xPos} y={height - 6} fontSize="10" fill="#64748b" textAnchor={anchor} fontWeight="bold">
@@ -710,7 +729,7 @@ export default function App() {
                     </div>
                 </div>
 
-                <section className="flex flex-col">
+                <section className="flex flex-col" ref={containerRef}>
                     <div className="flex justify-between items-end mb-2 px-1 flex-wrap gap-2">
                         <div>
                             <div className="flex items-center gap-2">
@@ -733,8 +752,8 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* Chart Container */}
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
+                    {/* Chart Container - Passes Width */}
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} />
                     
                     {/* Drag Handle - Added touch-action: none to CSS style to prevent scroll */}
                     <div 
