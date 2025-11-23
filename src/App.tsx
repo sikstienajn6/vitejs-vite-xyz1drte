@@ -595,4 +595,40 @@ export default function App() {
                 <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Weekly Rate (kg/wk)</label>
                     <input 
-                        type
+                        type="number" step="0.01" required 
+                        value={weeklyRate} 
+                        onChange={(e) => handleRateChange(e.target.value, 'weekly')}
+                        className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Monthly Rate (kg/mo)</label>
+                    <input 
+                        type="number" step="0.01" required 
+                        value={monthlyRate} 
+                        onChange={(e) => handleRateChange(e.target.value, 'monthly')}
+                        className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                    />
+                </div>
+
+                <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
+                    <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
+                    <p className="leading-relaxed">
+                        Positive for gaining, negative for losing. <br/>
+                        The chart tunnel is ±{TUNNEL_TOLERANCE}kg to account for water weight.
+                    </p>
+                </div>
+
+                <div className="pt-4 mt-auto">
+                    <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
+                        Save Plan
+                    </button>
+                </div>
+             </form>
+           </div>
+        )}
+      </div>
+    </div>
+  );
+}
