@@ -53,7 +53,6 @@ const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
 const TARGET_TOLERANCE = 0.2; 
-const MEDIAN_WINDOW_SIZE = 7; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -79,7 +78,6 @@ interface SettingsData {
 interface DailyData {
     date: string;
     raw: number | null;
-    trend: number | null;
     target: number;
     inTunnel: boolean;
 }
@@ -257,53 +255,42 @@ export default function App() {
     // 1. Generate Full Daily Timeline
     const allDays = getDaysArray(new Date(earliestDate), new Date(latestDate));
     const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-    
-    // 2. Calculate Rolling Median Trend (Day by Day)
-    const tMap = new Map<string, number>();
     const dMap = new Map<string, DailyData>();
     
-    // Populate trend map strictly based on RECORDED entries first
-    sortedWeights.forEach((entry, index) => {
-         const startIndex = Math.max(0, index - MEDIAN_WINDOW_SIZE + 1);
-         const windowSlice = sortedWeights.slice(startIndex, index + 1);
-         const windowValues = windowSlice.map(w => w.weight);
-         tMap.set(entry.date, calculateMedian(windowValues));
-    });
-
-    // 3. Run Tunnel Simulation (Day by Day)
+    // 2. Run Tunnel Simulation (Day by Day)
+    // We strictly follow the "Last Known Valid Weight" for tunnel snaps.
     const dailyRate = (settings.weeklyRate || 0) / 7;
-    let currentTarget = tMap.get(earliestDate) || sortedWeights[0].weight;
-    let lastKnownTrend = currentTarget;
+    let currentTarget = sortedWeights[0].weight;
+    let lastKnownWeight = sortedWeights[0].weight;
 
     allDays.forEach((dayStr) => {
-        // Update trend if we have a real entry today
-        if (tMap.has(dayStr)) {
-            lastKnownTrend = tMap.get(dayStr)!;
+        // Update known weight if we have a real entry today
+        if (weightMap.has(dayStr)) {
+            lastKnownWeight = weightMap.get(dayStr)!;
         }
 
         // Tunnel Logic: Check distance
-        const dist = Math.abs(lastKnownTrend - currentTarget);
+        const dist = Math.abs(lastKnownWeight - currentTarget);
         let inTunnel = true;
 
         if (dist <= TARGET_TOLERANCE) {
             // Smooth sailing: Target moves by daily rate
             currentTarget += dailyRate;
         } else {
-            // Reset: Target snaps to trend + daily rate
-            currentTarget = lastKnownTrend + dailyRate;
+            // Reset: Target snaps to last weight + daily rate
+            currentTarget = lastKnownWeight + dailyRate;
             inTunnel = false;
         }
 
         dMap.set(dayStr, {
             date: dayStr,
             raw: weightMap.get(dayStr) || null,
-            trend: tMap.get(dayStr) || null, // Sparse trend (only on data days)
             target: currentTarget,
             inTunnel
         });
     });
 
-    // 4. Aggregate Weekly Data (Using Medians)
+    // 3. Aggregate Weekly Data (Using Medians)
     const groups: Record<string, WeightEntry[]> = {};
     sortedWeights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
@@ -341,24 +328,24 @@ export default function App() {
         }
     }
 
-    // 5. Current Rate Calculation (Last Trend - Trend 7 Days Ago)
+    // 4. Current Rate Calculation (Weight Change over last 7 Days)
     const lastEntry = sortedWeights[sortedWeights.length - 1];
-    const currentTrendVal = tMap.get(lastEntry.date) || 0;
+    const currentWeight = lastEntry.weight;
     
     const sevenDaysAgo = new Date(lastEntry.date);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const sdaString = sevenDaysAgo.toISOString().split('T')[0];
     
-    // Find closest trend value to 7 days ago
-    let prevTrendVal = currentTrendVal; 
+    // Find closest weight record to 7 days ago
+    let prevWeight = currentWeight; 
     for(let i = sortedWeights.length - 2; i >= 0; i--) {
         if (sortedWeights[i].date <= sdaString) {
-            prevTrendVal = tMap.get(sortedWeights[i].date) || 0;
+            prevWeight = sortedWeights[i].weight;
             break;
         }
     }
     
-    const rate = currentTrendVal - prevTrendVal;
+    const rate = currentWeight - prevWeight;
 
     return { dailyDataMap: dMap, weeklyData: processedWeeks, currentTrendRate: rate };
   }, [weights, settings]);
@@ -409,7 +396,9 @@ export default function App() {
             return {
                 label: dateStr,
                 actual: data.raw,
-                trend: data.trend,
+                // CRITICAL CHANGE: Trend Line = Raw Data. 
+                // This makes the line connect the dots directly.
+                trend: data.raw, 
                 target: data.target,
                 targetUpper: data.target + TARGET_TOLERANCE,
                 targetLower: data.target - TARGET_TOLERANCE,
