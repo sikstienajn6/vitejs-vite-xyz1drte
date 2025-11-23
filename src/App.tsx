@@ -482,7 +482,10 @@ export default function App() {
 
   const handleDragMove = (e: MouseEvent | TouchEvent) => {
     if (!isDraggingRef.current) return;
-    if (e.type === 'touchmove') e.preventDefault();
+    
+    // STRICT PREVENT: Stops browser from scrolling/bouncing while resizing
+    if (e.cancelable) e.preventDefault();
+    if (e.type === 'touchmove') e.stopImmediatePropagation();
 
     const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
     const delta = clientY - startYRef.current;
@@ -523,11 +526,12 @@ export default function App() {
       </div>
     );
 
-    const width = 600; 
+    // FIXED: Use percentages or exact container fitting (100% width via viewBox)
+    const width = 1000; // Virtual coordinate width (high res)
     const expanded = height > SNAP_THRESHOLD;
     
-    // MARGINS: Minimized to fill box. Padding bottom increased slightly for text
-    const padding = { top: 10, bottom: 24, left: expanded ? 40 : 30, right: 20 };
+    // MARGINS: REMOVED LEFT/RIGHT PADDING to fill box
+    const padding = { top: 10, bottom: 20, left: 0, right: 0 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
@@ -537,17 +541,18 @@ export default function App() {
         return vals;
     });
     
-    // Tight 1% buffer for max vertical filling
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin || 1;
-    const buffer = rawRange * 0.01; 
+    const buffer = rawRange * 0.05; // 5% buffer top/bottom only
     
     const minVal = rawMin - buffer;
     const maxVal = rawMax + buffer;
     const range = maxVal - minVal || 1;
 
-    const getX = (i: number) => padding.left + (i / (data.length - 1)) * (width - padding.left - padding.right);
+    // X Calculation maps 0 to width directly
+    const getX = (i: number) => (i / (data.length - 1)) * width;
+    
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
 
     const areaPoints = [
@@ -570,73 +575,68 @@ export default function App() {
         lastValidT = i;
     });
 
-    const labelInterval = Math.ceil(data.length / (width / 60)); 
+    // Smart label interval to prevent overlap
+    const labelInterval = Math.max(1, Math.floor(data.length / 6)); 
 
     return (
       <div 
         className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
         style={{height: height}}
       >
-        {/* Click to toggle explanation */}
-        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer">
+        {/* Changed width="100%" and preserveAspectRatio="none" to STRETCH the graph completely */}
+        <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" onClick={() => setShowExplanation(!showExplanation)} className="cursor-pointer block">
           
-          {/* Grid */}
-          <line x1={padding.left} y1={getY(minVal)} x2={width-padding.right} y2={getY(minVal)} stroke="#1e293b" strokeWidth="1" />
-          <line x1={padding.left} y1={getY(maxVal)} x2={width-padding.right} y2={getY(maxVal)} stroke="#1e293b" strokeWidth="1" />
-          
-          {/* Y-Axis Labels */}
-          {expanded && (
-              <>
-                <text x={padding.left - 8} y={getY(minVal) - 6} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{minVal.toFixed(1)}</text>
-                <text x={padding.left - 8} y={getY(maxVal) + 6} fill="#64748b" fontSize="12" textAnchor="end" alignmentBaseline="middle">{maxVal.toFixed(1)}</text>
-              </>
-          )}
-
-          {/* Tunnel */}
+          {/* Tunnel (Full Width) */}
           <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
-          {/* Gradient Trend Line */}
+          {/* Gradient Trend Line (Green Inside / Red Outside) */}
           <defs>
             <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
                 {data.map((d, i) => {
                     if (d.trend === null) return null;
                     const offset = (i / (data.length - 1)) * 100;
+                    // LOGIC CHANGE: Red if outside, Green if inside
                     const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
-                    return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#3b82f6"} />;
+                    return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#10b981"} />;
                 })}
             </linearGradient>
           </defs>
-          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2.5"} strokeLinecap="round" strokeLinejoin="round" />
+          {/* vector-effect ensures line thickness stays constant even if SVG stretches */}
+          <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
 
-          {/* Data Dots */}
+          {/* Data Dots (Uniform Color) */}
           {data.map((d, i) => {
              if (d.actual === null) return null;
-             // RAW CHECK: Is THIS reading inside the tunnel?
-             const isDotOff = d.actual > d.targetUpper || d.actual < d.targetLower;
-             
+             // VISUAL CHANGE: No red dots. All dots are slate/grey.
              return (
-                <g key={i}>
-                    <circle 
-                        cx={getX(i)} 
-                        cy={getY(d.actual)} 
-                        r={expanded ? 3 : 2.5} 
-                        fill={isDotOff ? "#ef4444" : "#94a3b8"} 
-                        opacity={isDotOff ? "0.9" : "0.4"}
-                    />
-                    {expanded && (
-                        <text x={getX(i)} y={getY(d.actual) - 10} fontSize="10" fill="#cbd5e1" textAnchor="middle">
-                            {d.actual.toFixed(1)}
-                        </text>
-                    )}
-                </g>
+                <circle 
+                    key={i}
+                    cx={getX(i)} 
+                    cy={getY(d.actual)} 
+                    r={expanded ? 3 : 2} 
+                    fill="#94a3b8" 
+                    opacity="0.6"
+                    vectorEffect="non-scaling-stroke"
+                />
              );
           })}
 
-          {/* X-Axis Labels */}
+          {/* X-Axis Labels (Only drawn if inside visible area) */}
           {data.map((d, i) => {
              if (i % labelInterval !== 0 && i !== data.length - 1) return null;
+             // Inset labels slightly if they are on the very edge
+             let anchor = "middle";
+             if (i === 0) anchor = "start";
+             if (i === data.length - 1) anchor = "end";
+             
+             // Adjust X for padding if needed, but since we want full width, text might clip if not careful.
+             // We use a small offset for start/end.
+             let xPos = getX(i);
+             if (i === 0) xPos += 4;
+             if (i === data.length - 1) xPos -= 4;
+
              return (
-                <text key={i} x={getX(i)} y={height - 6} fontSize="10" fill="#64748b" textAnchor="middle">
+                <text key={i} x={xPos} y={height - 6} fontSize="10" fill="#64748b" textAnchor={anchor} fontWeight="bold">
                     {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                 </text>
              );
@@ -711,7 +711,6 @@ export default function App() {
                 </div>
 
                 <section className="flex flex-col">
-                    {/* Chart Header Controls */}
                     <div className="flex justify-between items-end mb-2 px-1 flex-wrap gap-2">
                         <div>
                             <div className="flex items-center gap-2">
@@ -734,33 +733,31 @@ export default function App() {
                         </div>
                     </div>
 
-                    {/* Expandable Chart Container */}
+                    {/* Chart Container */}
                     <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight}/>
                     
-                    {/* Drag Handle / Grip Area */}
-                    <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2" style={{ touchAction: 'none' }}>
-                        
-                        {/* Legend */}
+                    {/* Drag Handle - Added touch-action: none to CSS style to prevent scroll */}
+                    <div 
+                        className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
+                        style={{ touchAction: 'none' }} 
+                    >
                         <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-500"></div>Trend</div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
                             <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>Tunnel</div>
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Raw</div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
                         </div>
 
-                        {/* Info Explanation */}
                         {showExplanation && (
                             <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
                                     <Info size={12} className="text-blue-500" /> EMA Model
                                 </div>
-                                <p>Blue Line = <strong>Trend Weight</strong> (smoothed). Grey dots = Scale readings. Red = Off track.</p>
+                                <p>Green Line = On Track. Red Line = Off Track. Grey dots = Raw Scale Readings.</p>
                             </div>
                         )}
 
-                        {/* Handle */}
                         <div 
                             className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg"
-                            style={{ touchAction: 'none' }} // KEY FIX for scrolling issues
                             onMouseDown={handleDragStart}
                             onTouchStart={handleDragStart}
                             onClick={toggleExpand}
