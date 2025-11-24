@@ -114,16 +114,6 @@ const getWeekKey = (date: string) => {
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
-const getWeekDateFromKey = (weekKey: string) => {
-    // Inverse of getWeekKey to find approx start date (Monday)
-    const [year, week] = weekKey.split('-W').map(Number);
-    const d = new Date(Date.UTC(year, 0, 1 + (week - 1) * 7));
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    d.setDate(diff);
-    return d.toISOString().split('T')[0];
-};
-
 const formatDate = (dateString: string) => {
   if (!dateString) return '';
   const d = new Date(dateString);
@@ -381,7 +371,10 @@ export default function App() {
     if (weeklyData.length === 0 || !settings) return [];
 
     const now = new Date();
-    const latestLogged = new Date(weeklyData[weeklyData.length - 1].startDate);
+    // Safety check: weeklyData is not empty (checked above), but element might be undefined in strict mode
+    const lastWeek = weeklyData[weeklyData.length - 1];
+    const latestLogged = lastWeek ? new Date(lastWeek.startDate) : now;
+    
     // Show chart up to whichever is later: Today or the projected future week
     const endChartDate = now > latestLogged ? now : latestLogged; 
 
