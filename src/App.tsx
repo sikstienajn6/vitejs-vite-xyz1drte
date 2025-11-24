@@ -658,15 +658,10 @@ export default function App() {
     const rawMax = Math.max(...validValues);
     const rawRange = rawMax - rawMin;
 
-    // FIX: Force minimum range of 0.5 to prevent duplicate axis labels
-    // 5 grid lines = 4 intervals. 0.5 / 4 = 0.125, which ensures distinct 0.1 labels.
     const effectiveRange = Math.max(rawRange, 0.5);
-    
-    // Add 5% buffer relative to effective range
     const buffer = effectiveRange * 0.05;
     const midPoint = (rawMax + rawMin) / 2;
     
-    // Calculate final min/max centred on the data midpoint
     const minVal = midPoint - (effectiveRange / 2) - buffer;
     const maxVal = midPoint + (effectiveRange / 2) + buffer;
     const range = maxVal - minVal;
@@ -702,7 +697,6 @@ export default function App() {
             const color = interpolateColor(diff);
             const offset = (i / denominator) * 100;
             
-            // For the very first valid segment, we need a starting stop at 0 or the previous point's offset
             if (stopList.length === 0) {
                  stopList.push(<stop key={`start-${i}`} offset={`${((i-1)/denominator)*100}%`} stopColor={color} />);
             }
@@ -727,38 +721,27 @@ export default function App() {
         });
     }
 
-    // --- SINGLE CONTINUOUS PROJECTION LINE ---
-    let projectionLine = null;
-    if (projection && data.length > 1) {
+    // --- PROJECTION PATH (Corrected for Irregular X-Axis) ---
+    // Instead of a straight visual line (which assumes linear time on X-axis),
+    // we calculate the target Y for EACH point based on its exact date difference.
+    let projectionPath = '';
+    if (projection && data.length > 0) {
         const msPerDay = 86400000;
         
-        // Calculate Y for First visible point
-        const firstPoint = data[0];
-        const diffDaysStart = (firstPoint.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-        const valStart = projection.anchorVal + (diffDaysStart * projection.dailySlope);
-        
-        // Calculate Y for Last visible point
-        const lastPoint = data[data.length - 1];
-        const diffDaysEnd = (lastPoint.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-        const valEnd = projection.anchorVal + (diffDaysEnd * projection.dailySlope);
-        
-        const x1 = getX(0);
-        const y1 = getY(valStart);
-        const x2 = getX(data.length - 1);
-        const y2 = getY(valEnd);
-        
-        projectionLine = (
-            <line 
-                x1={x1} 
-                y1={y1} 
-                x2={x2} 
-                y2={y2} 
-                stroke="#10b981" 
-                strokeWidth="1.5"
-                strokeDasharray="4 4" 
-                opacity="0.8"
-            />
-        );
+        data.forEach((d, i) => {
+             // 1. Calculate time delta from anchor
+             const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+             
+             // 2. Calculate ideal Y for this specific date
+             const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+             
+             // 3. Map to screen coords
+             const x = getX(i);
+             const y = getY(idealY);
+             
+             if (i === 0) projectionPath += `M ${x},${y} `;
+             else projectionPath += `L ${x},${y} `;
+        });
     }
 
     // --- SMART AXIS LOGIC ---
@@ -792,8 +775,17 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* PROJECTION LINE */}
-          {projectionLine}
+          {/* PROJECTION LINE (PATH) */}
+          {projectionPath && (
+              <path 
+                d={projectionPath}
+                fill="none"
+                stroke="#10b981" 
+                strokeWidth="1.5"
+                strokeDasharray="4 4" 
+                opacity="0.8"
+              />
+          )}
 
           {/* TREND LINE */}
           {count > 1 && (
