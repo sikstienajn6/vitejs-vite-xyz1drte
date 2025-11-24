@@ -665,7 +665,7 @@ export default function App() {
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height, width, settings, projection }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null }) => {
+  const ChartRenderer = ({ data, mode, height, width, settings, projection, weeklyData }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null, weeklyData: WeeklySummary[] }) => {
     if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log data to see trend</p>
@@ -729,10 +729,29 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
+    // --- CREATE WEEK DELTA MAP FOR DAILY MODE ---
+    const weekDeltaMap = useMemo(() => {
+        if (mode !== 'daily' || !settings) return new Map<string, number>();
+        const map = new Map<string, number>();
+        // Create a map from week key to delta
+        const weekKeyToDelta = new Map<string, number>();
+        weeklyData.forEach(week => {
+            weekKeyToDelta.set(week.weekId, week.delta);
+        });
+        // Map each day in the data to its week's delta
+        data.forEach(point => {
+            const weekKey = getWeekKey(point.label);
+            const delta = weekKeyToDelta.get(weekKey);
+            if (delta !== undefined) {
+                map.set(point.label, delta);
+            }
+        });
+        return map;
+    }, [mode, weeklyData, settings, data]);
+
     // --- GRADIENT LOGIC (Smooth RGB Interpolation) ---
     const stops = useMemo(() => {
-        if (data.length < 2 || mode === 'daily') return [];
-        if (!settings) return [];
+        if (data.length < 2 || !settings) return [];
         
         const stopList: React.ReactElement[] = [];
 
@@ -741,10 +760,24 @@ export default function App() {
             const prev = data[i-1];
             if (prev.trend === null) return;
             
-            // Calculate Slope for this segment
-            const currentSlope = point.trend - prev.trend;
-            const targetSlope = settings.weeklyRate; 
-            const diff = Math.abs(currentSlope - targetSlope);
+            let diff: number;
+            
+            if (mode === 'weekly') {
+                // Calculate Slope for this segment (weekly mode)
+                const currentSlope = point.trend - prev.trend;
+                const targetSlope = settings.weeklyRate; 
+                diff = Math.abs(currentSlope - targetSlope);
+            } else {
+                // Daily mode: use the week's delta for this day
+                const dayDate = point.label;
+                const weekDelta = weekDeltaMap.get(dayDate);
+                if (weekDelta === undefined) {
+                    // If day doesn't have a week delta, skip
+                    return;
+                }
+                const targetSlope = settings.weeklyRate;
+                diff = Math.abs(weekDelta - targetSlope);
+            }
             
             const color = interpolateColor(diff);
             const offset = (i / denominator) * 100;
@@ -757,7 +790,7 @@ export default function App() {
         });
         
         return stopList;
-    }, [data, settings, mode, denominator]);
+    }, [data, settings, mode, denominator, weekDeltaMap]);
 
     // --- WEEKLY ANCHOR LOOKUP ---
     const weeklyAnchorIndex = useMemo(() => {
@@ -853,7 +886,7 @@ export default function App() {
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
           <defs>
-             {mode === 'weekly' && stops.length > 0 && (
+             {stops.length > 0 && (
                  <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
                     {stops}
                  </linearGradient>
@@ -898,7 +931,7 @@ export default function App() {
              <path 
                 d={trendPath} 
                 fill="none" 
-                stroke={mode === 'weekly' ? "url(#trendGradient)" : "#10b981"} 
+                stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"} 
                 strokeWidth={expanded ? "3" : "2"} 
                 strokeLinecap="round" 
                 strokeLinejoin="round" 
@@ -1068,7 +1101,7 @@ export default function App() {
                         </div>
                     </div>
 
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} />
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} weeklyData={weeklyData} />
                     
                     <div 
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
