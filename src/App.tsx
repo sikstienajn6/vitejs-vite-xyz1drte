@@ -100,6 +100,7 @@ interface ProjectionData {
   anchorDate: Date;
   anchorVal: number;
   dailySlope: number;
+  weeklySlope: number; // Added explicit weekly rate for snapping
 }
 
 // --- Helper Functions ---
@@ -356,8 +357,6 @@ export default function App() {
     const dailySlope = rate / 7;
 
     if (chartMode === 'daily') {
-        // Daily: Anchor is the "Next to Last" entered weight's trend value
-        // Weights are sorted descending (0 is latest, 1 is next to last)
         const anchorIndex = weights.length > 1 ? 1 : 0;
         const anchorEntry = weights[anchorIndex];
         const anchorVal = trendMap.get(anchorEntry.date) ?? anchorEntry.weight;
@@ -365,21 +364,20 @@ export default function App() {
         return {
             anchorDate: new Date(anchorEntry.date),
             anchorVal: anchorVal,
-            dailySlope: dailySlope
+            dailySlope: dailySlope,
+            weeklySlope: rate
         };
     } else {
         // Weekly: Anchor is the "Next to Last" week's trend
         const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
-        // weeklyData is sorted Ascending in the calculation block, so last is current, last-1 is prev
         const anchorWeek = weeklyData[anchorIndex];
-        
-        // We use the start date of that week for math
         const anchorDate = new Date(anchorWeek.entries[0].date); 
         
         return {
             anchorDate: anchorDate,
             anchorVal: anchorWeek.actual,
-            dailySlope: dailySlope // We still use linear projection
+            dailySlope: dailySlope,
+            weeklySlope: rate
         };
     }
   }, [weights, weeklyData, chartMode, settings, trendMap]);
@@ -721,21 +719,26 @@ export default function App() {
         });
     }
 
-    // --- PROJECTION PATH (Corrected for Irregular X-Axis) ---
-    // Instead of a straight visual line (which assumes linear time on X-axis),
-    // we calculate the target Y for EACH point based on its exact date difference.
+    // --- PROJECTION PATH ---
     let projectionPath = '';
     if (projection && data.length > 0) {
         const msPerDay = 86400000;
         
         data.forEach((d, i) => {
-             // 1. Calculate time delta from anchor
+             let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+
+             // --- SNAP LOGIC FOR WEEKLY VIEW ---
+             if (mode === 'weekly') {
+                 // Round to nearest integer week to force "Column based" steps
+                 // This ignores irregular days (e.g. 9 days vs 7 days) and treats them as "1 Step"
+                 const diffWeeks = Math.round(diffDays / 7);
+                 idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
+             } else {
+                 // Daily mode: Use exact linear time
+                 idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+             }
              
-             // 2. Calculate ideal Y for this specific date
-             const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-             
-             // 3. Map to screen coords
              const x = getX(i);
              const y = getY(idealY);
              
