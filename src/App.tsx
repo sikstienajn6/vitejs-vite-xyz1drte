@@ -441,6 +441,18 @@ export default function App() {
     }
   }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
 
+  // --- ACTIONS ---
+  const resetSettingsForm = () => {
+     if (settings) {
+        const wRate = settings.weeklyRate || 0;
+        const isNegative = wRate < 0;
+        const absRate = Math.abs(wRate);
+        setGoalType(isNegative ? 'lose' : 'gain');
+        setWeeklyRate(absRate.toString());
+        setMonthlyRate((absRate * 4.345).toFixed(2));
+     }
+  };
+
   const handleNavigation = (targetView: 'dashboard' | 'settings') => {
     if (view === 'settings' && targetView === 'dashboard') resetSettingsForm();
     setView(targetView);
