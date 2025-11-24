@@ -911,7 +911,7 @@ for (let i = 0; i < processedWeeks.length; i++) {
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
                                     <Info size={12} className="text-blue-500" /> EMA model
                                 </div>
-                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
+                                <p>Exponentialwda Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
                             </div>
                         )}
 
