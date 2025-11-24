@@ -90,7 +90,7 @@ interface WeeklySummary {
 
 interface ChartPoint {
     label: string; 
-    dateObj: Date; // Added for easier date math in renderer
+    dateObj: Date; 
     actual: number | null; 
     trend: number | null;  
     weekLabel?: string;
@@ -654,17 +654,22 @@ export default function App() {
         return vals;
     });
     
-    // Need to account for projection line in Y-scale range if possible, 
-    // but usually better to let it clip if it goes way off chart to keep data focus.
-    
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
-    const rawRange = rawMax - rawMin || 1;
-    const buffer = rawRange * 0.05; 
+    const rawRange = rawMax - rawMin;
+
+    // FIX: Force minimum range of 0.5 to prevent duplicate axis labels
+    // 5 grid lines = 4 intervals. 0.5 / 4 = 0.125, which ensures distinct 0.1 labels.
+    const effectiveRange = Math.max(rawRange, 0.5);
     
-    const minVal = rawMin - buffer;
-    const maxVal = rawMax + buffer;
-    const range = maxVal - minVal || 1;
+    // Add 5% buffer relative to effective range
+    const buffer = effectiveRange * 0.05;
+    const midPoint = (rawMax + rawMin) / 2;
+    
+    // Calculate final min/max centred on the data midpoint
+    const minVal = midPoint - (effectiveRange / 2) - buffer;
+    const maxVal = midPoint + (effectiveRange / 2) + buffer;
+    const range = maxVal - minVal;
 
     const availableWidth = renderWidth - padding.left - padding.right;
     const count = data.length;
