@@ -635,15 +635,10 @@ export default function App() {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    // --- GRADIENT COLOR CALCULATOR ---
-    const getPointColor = (index: number) => {
+    // --- SLOPE COLOR CALCULATOR ---
+    const getSlopeColor = (curr: number, prev: number) => {
         if (!settings) return '#10b981';
-        
-        let slope = 0;
-        if (index > 0 && data[index].trend !== null && data[index-1].trend !== null) {
-            slope = (data[index].trend as number) - (data[index-1].trend as number);
-        }
-
+        const slope = curr - prev;
         const divisor = mode === 'weekly' ? 1 : 7;
         const targetSlope = settings.weeklyRate / divisor;
         const diff = Math.abs(slope - targetSlope);
@@ -651,10 +646,51 @@ export default function App() {
         const tGreen = RATE_TOLERANCE_GREEN / divisor; 
         const tOrange = RATE_TOLERANCE_ORANGE / divisor; 
         
-        if (diff <= tGreen) return '#10b981'; // Emerald (Good)
-        if (diff <= tOrange) return '#fbbf24'; // Amber (Warning)
-        return '#ef4444'; // Red (Bad)
+        if (diff <= tGreen) return '#10b981'; // Emerald
+        if (diff <= tOrange) return '#fbbf24'; // Amber
+        return '#ef4444'; // Red
     };
+
+    // --- GRADIENT STOPS ---
+    const stops = useMemo(() => {
+        if (data.length < 2) return [];
+        const stopList: JSX.Element[] = [];
+        const fadePercent = (100 / denominator) * 0.15; // 15% transition width around intersection
+
+        data.forEach((point, i) => {
+            const offset = (i / denominator) * 100;
+
+            // Incoming (segment ending at i)
+            let colorIn = '#10b981';
+            if (i > 0 && point.trend !== null && data[i-1].trend !== null) {
+                colorIn = getSlopeColor(point.trend, data[i-1].trend!);
+            }
+            
+            // Outgoing (segment starting at i)
+            let colorOut = '#10b981';
+            if (i < denominator && data[i+1].trend !== null && point.trend !== null) {
+                colorOut = getSlopeColor(data[i+1].trend!, point.trend);
+            }
+
+            if (i === 0) {
+                // First point: Start solid outgoing color
+                stopList.push(<stop key={`${i}-start`} offset="0%" stopColor={colorOut} />);
+                stopList.push(<stop key={`${i}-clamp`} offset={`${fadePercent}%`} stopColor={colorOut} />);
+            } else if (i === denominator) {
+                // Last point: End solid incoming color
+                stopList.push(<stop key={`${i}-clamp`} offset={`${100 - fadePercent}%`} stopColor={colorIn} />);
+                stopList.push(<stop key={`${i}-end`} offset="100%" stopColor={colorIn} />);
+            } else {
+                // Middle point: Transition from Incoming to Outgoing
+                const startFade = Math.max(0, offset - fadePercent);
+                const endFade = Math.min(100, offset + fadePercent);
+                
+                stopList.push(<stop key={`${i}-in`} offset={`${startFade}%`} stopColor={colorIn} />);
+                stopList.push(<stop key={`${i}-out`} offset={`${endFade}%`} stopColor={colorOut} />);
+            }
+        });
+        return stopList;
+    }, [data, settings, mode, denominator]);
 
     let trendPath = '';
     if (count > 1) {
@@ -682,27 +718,8 @@ export default function App() {
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
           <defs>
-             {/* GRADIENT DEFINITION */}
              <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
-                {data.map((_, i) => {
-                   if (i === 0) return null;
-                   
-                   // Double-stop technique:
-                   // The color for segment i (from i-1 to i) applies from (i-1) to i.
-                   // We add a stop at the start (i-1) and end (i) with the same color.
-                   // This creates a solid block of color for that segment with sharp transitions at nodes.
-                   
-                   const prevOffset = ((i - 1) / denominator) * 100;
-                   const curOffset = (i / denominator) * 100;
-                   const color = getPointColor(i);
-
-                   return (
-                     <React.Fragment key={i}>
-                        <stop offset={`${prevOffset.toFixed(2)}%`} stopColor={color} />
-                        <stop offset={`${curOffset.toFixed(2)}%`} stopColor={color} />
-                     </React.Fragment>
-                   );
-                })}
+                {stops}
              </linearGradient>
           </defs>
 
