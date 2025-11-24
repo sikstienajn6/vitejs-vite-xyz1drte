@@ -1,3 +1,13 @@
+The build failed because variables were left unused after removing the "advice" section.
+
+**Fixes applied:**
+
+1.  Removed `Utensils` from the imports.
+2.  Removed the unused `advice` variable declaration.
+
+Here is the corrected code:
+
+```tsx
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { 
@@ -32,8 +42,7 @@ import {
   Clock,
   LogOut,
   LogIn,
-  Info,
-  Utensils
+  Info
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -552,8 +561,6 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  const advice = null; // Removed advice temporarily for cleanliness
-
   // --- DRAG & SNAP LOGIC ---
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
@@ -707,27 +714,12 @@ export default function App() {
         const upperPoints: [number, number][] = [];
         const lowerPoints: [number, number][] = [];
         
-        // Find anchor relative to current dataset
-        // For weekly view, we need to map the current data points to their index distance from anchor
-        
         data.forEach((d, i) => {
              let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
 
              // --- SNAP LOGIC FOR WEEKLY VIEW ---
              if (mode === 'weekly') {
-                 // Use Visual Column Index Difference
-                 // We find the index of the anchor in the FULL dataset (passed via projection.anchorIndex)
-                 // But we need the index of *this* point 'i' relative to the anchor
-                 // Since 'data' might be filtered (1M, 3M), we can't just subtract indices directly if filtered.
-                 // However, for slope consistency on categorical axis, we should assume equal spacing = 1 unit.
-                 // Ideally, we'd find the index of 'd.label' in the original full dataset.
-                 // Approximating with date round gives "Time Consistency". 
-                 // Approximating with visual steps gives "Visual Consistency".
-                 // User asked for visual consistency (slope looked wrong).
-                 
-                 // If data is filtered, we need to know how many "columns" away we are.
-                 // Let's use the date rounding but force integers.
                  const diffWeeks = Math.round(diffDays / 7);
                  idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
              } else {
@@ -1156,3 +1148,4 @@ export default function App() {
     </div>
   );
 }
+```
