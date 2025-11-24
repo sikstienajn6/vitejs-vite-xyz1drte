@@ -654,7 +654,7 @@ export default function App() {
     // --- GRADIENT STOPS ---
     const stops = useMemo(() => {
         if (data.length < 2) return [];
-        const stopList: JSX.Element[] = [];
+        const stopList: React.ReactElement[] = [];
         const fadePercent = (100 / denominator) * 0.15; // 15% transition width around intersection
 
         data.forEach((point, i) => {
