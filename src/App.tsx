@@ -684,7 +684,7 @@ export default function App() {
           <defs>
              {/* GRADIENT DEFINITION */}
              <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
-                {data.map((d, i) => {
+                {data.map((_, i) => {
                    const offset = (i / denominator) * 100;
                    return <stop key={i} offset={`${offset}%`} stopColor={getPointColor(i)} />;
                 })}
