@@ -6,9 +6,7 @@ import {
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
-  type User,
-  signInWithCustomToken, // Added for TS compiler
-  signInAnonymously // Added for TS compiler
+  type User 
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -39,14 +37,6 @@ import {
   Utensils
 } from 'lucide-react';
 
-// --- GLOBAL VARIABLE DECLARATION for TypeScript ---
-// This informs the TS compiler that these variables exist in the global scope 
-// (provided by the Canvas runtime environment).
-declare global {
-    var __firebase_config: string | undefined;
-    var __initial_auth_token: string | undefined;
-}
-
 // --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE",
@@ -57,17 +47,14 @@ const firebaseConfig = {
   appId: "1:895893600072:web:e329aba69602d46fa8e57d",
 };
 
-// Use global variables if available, otherwise fall back to placeholders
-const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
-
-const app = initializeApp(config);
+const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const googleProvider = new GoogleAuthProvider();
 
 // --- LOGIC CONSTANTS ---
-const TARGET_TOLERANCE = 0.2; // Tunnel width: +/- 0.2kg from target
-const EMA_ALPHA = 0.1; // Exponential Moving Average smoothing factor
+const TARGET_TOLERANCE = 0.2; 
+const EMA_ALPHA = 0.1; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 const BREAK_LINE_THRESHOLD_DAYS = 7; 
@@ -93,41 +80,34 @@ interface SettingsData {
 interface WeeklySummary {
   weekId: string;
   weekLabel: string;
-  actual: number; // Week's average trend (EMA)
-  rawAvg: number; // Week's raw average weight
+  actual: number; 
+  rawAvg: number; 
   count: number;
   entries: WeightEntry[];
-  target: number; // Week's calculated target
-  delta: number; // Change from previous week's trend
+  target: number;
+  delta: number;
   hasPrev: boolean;
   inTunnel: boolean; 
-  isReset: boolean; // Flag if tunnel anchor was significantly shifted
 }
 
 interface ChartPoint {
-  label: string; 
-  actual: number | null; // Raw reading
-  trend: number | null; // EMA trend
-  target: number;
-  targetUpper: number;
-  targetLower: number;
-  weekLabel?: string;
-  groupKey: string; // Used to group segments (e.g., weekId)
-  isGap?: boolean; // Used in Weekly mode to force a break
+    label: string; 
+    actual: number | null; 
+    trend: number | null;  
+    target: number;
+    targetUpper: number;
+    targetLower: number;
+    weekLabel?: string;
 }
 
 // --- Helper Functions ---
 const getWeekKey = (date: string) => {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
-  // ISO week calculation (Mon-Sun), adjusting to start of week (Monday)
-  const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
-  const weekStart = new Date(d.setDate(diff));
-
-  const yearStart = new Date(Date.UTC(weekStart.getFullYear(), 0, 1));
-  const weekNo = Math.ceil((((weekStart.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return `${weekStart.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
 const formatDate = (dateString: string) => {
@@ -173,24 +153,8 @@ export default function App() {
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87'); 
 
-  // --- AUTH & FIREBASE INIT ---
+  // --- AUTH ---
   useEffect(() => {
-    const initializeAuth = async () => {
-        try {
-            // Check for the global token using the defined global scope
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
-            }
-        } catch (error) {
-            console.error("Firebase Auth failed:", error);
-            // Fallback to anonymous if custom token fails
-            try { await signInAnonymously(auth); } catch (e) { console.error("Anonymous sign-in failed:", e); }
-        }
-    };
-    initializeAuth();
-
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
@@ -215,8 +179,7 @@ export default function App() {
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
       console.error("Login initiation failed:", error);
-      // In a production app, use a custom modal instead of alert
-      console.log("Login failed: " + error.message); 
+      alert("Login failed: " + error.message);
     }
   };
 
@@ -232,25 +195,21 @@ export default function App() {
       return;
     }
 
-    const userId = user.uid;
-
-    // Fetch Weights
-    const qWeights = query(collection(db, 'users', userId, 'weights'), orderBy('date', 'desc'));
+    // @ts-ignore
+    const qWeights = query(collection(db, 'users', user.uid, 'weights'), orderBy('date', 'desc'));
     const unsubWeights = onSnapshot(qWeights, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as WeightEntry[];
-      // Sort by date ascending for correct EMA calculation
-      const sortedData = data.sort((a, b) => a.date.localeCompare(b.date));
-      setWeights(sortedData);
+      setWeights(data);
     }, (err) => console.error("Weight fetch error:", err));
 
-    // Fetch Settings
-    const docRef = doc(db, 'users', userId, 'settings', 'config');
+    // @ts-ignore
+    const docRef = doc(db, 'users', user.uid, 'settings', 'config');
     const unsubSettings = onSnapshot(docRef, (snapshot) => {
       if (snapshot.exists()) {
         const s = snapshot.data() as SettingsData;
         setSettings(s);
         
-        const wRate = s.weeklyRate || 0;
+        const wRate = s.weeklyRate ? s.weeklyRate : 0;
         const isNegative = wRate < 0;
         const absRate = Math.abs(wRate);
         
@@ -269,7 +228,7 @@ export default function App() {
     };
   }, [user]);
 
-  // --- CALCULATIONS (EMA & DYNAMIC TARGET) ---
+  // --- CALCULATIONS ---
   const { weeklyData, trendMap, currentTrendRate } = useMemo(() => {
     if (weights.length === 0 || !settings) {
         return { weeklyData: [] as WeeklySummary[], trendMap: new Map(), currentTrendRate: 0 };
@@ -277,19 +236,16 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // 1. Calculate Daily EMA Trend
     const tMap = new Map<string, number>();
     let currentTrend = sortedWeights[0].weight; 
 
     sortedWeights.forEach((entry) => {
-      // EMA calculation
-      currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
-      tMap.set(entry.date, currentTrend);
+        currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
+        tMap.set(entry.date, currentTrend);
     });
 
-    // 2. Group by Week and Calculate Weekly Average Trend
     const groups: Record<string, WeightEntry[]> = {};
-    sortedWeights.forEach(entry => {
+    weights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
       if (!groups[weekKey]) groups[weekKey] = [];
       groups[weekKey].push(entry);
@@ -303,54 +259,43 @@ export default function App() {
       const rawAvg = valSum / entries.length;
       
       const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
-      const trendAvg = trendSum / entries.length; // Weekly Trend is average of daily EMA
+      const trendAvg = trendSum / entries.length;
 
-      const earliestDate = entries[0].date; // First entry's date in this sorted week
+      const earliestDate = entries[entries.length - 1].date; 
 
       return {
         weekId: weekKey,
         weekLabel: formatDate(earliestDate),
-        actual: trendAvg, // This is the anchor weight for the start of the next period
+        actual: trendAvg, 
         rawAvg: rawAvg,
         count: entries.length,
         entries: entries,
         target: 0, 
         delta: 0,
         hasPrev: false,
-        inTunnel: true,
-        isReset: false
+        inTunnel: true 
       };
     });
 
-    // 3. Calculate Dynamic Target (Tunnel)
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
-            // First week's target is the average trend of the first week
             processedWeeks[i].target = processedWeeks[i].actual;
-            processedWeeks[i].isReset = true; // First point is always the starting anchor
         } else {
             const prev = processedWeeks[i-1];
+            const dist = Math.abs(prev.actual - prev.target);
             
-            // CORE CORRECTION: The target for the current period (i) is always based on the 
-            // preceding period's actual EMA trend (prev.actual) + the desired rate.
-            // This ensures the tunnel continually re-anchors to the current state of affairs.
-            processedWeeks[i].target = prev.actual + rate;
-            
-            // Determine the visualization reset/gap flag based on if the PREVIOUS 
-            // week's trend was outside its original target tunnel.
-            const distFromTarget = Math.abs(prev.actual - prev.target);
-            processedWeeks[i].isReset = distFromTarget > TARGET_TOLERANCE;
+            if (dist <= TARGET_TOLERANCE) {
+                processedWeeks[i].target = prev.target + rate;
+            } else {
+                processedWeeks[i].target = prev.actual + rate;
+            }
             
             processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
             processedWeeks[i].hasPrev = true;
         }
-        
-        // The inTunnel check determines if the current week's average trend is inside 
-        // the current week's calculated target tunnel.
         processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
     }
 
-    // 4. Calculate Current Trend Rate (Change over last 7 days)
     const lastEntry = sortedWeights[sortedWeights.length - 1];
     const lastTrend = tMap.get(lastEntry.date) || 0;
     
@@ -358,7 +303,6 @@ export default function App() {
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const sdaString = sevenDaysAgo.toISOString().split('T')[0];
     
-    // Find the trend value closest to 7 days ago
     let prevTrend = lastTrend; 
     for(let i = sortedWeights.length - 2; i >= 0; i--) {
         if (sortedWeights[i].date <= sdaString) {
@@ -379,7 +323,7 @@ export default function App() {
 
     const now = new Date();
     let startDate = new Date('2000-01-01'); 
-    const earliestDataDate = new Date(weights[0]?.date || now); // Use first date for ALL range
+    const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
 
     if (filterRange === '1M') {
         startDate = new Date();
@@ -405,18 +349,14 @@ export default function App() {
                 target: w.target,
                 targetUpper: w.target + TARGET_TOLERANCE,
                 targetLower: w.target - TARGET_TOLERANCE,
-                groupKey: 'weekly-main',
-                isGap: w.isReset 
             }));
     } else {
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-        const dailyRate = rate / 7; // Daily slope
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
         const allDays = getDaysArray(startDate, now);
 
         return allDays.map(dateStr => {
-            const dateObj = new Date(dateStr);
             const wKey = getWeekKey(dateStr);
             const parentWeek = weekMap.get(wKey);
             
@@ -424,18 +364,11 @@ export default function App() {
             let targetFound = false;
 
             if (parentWeek) {
-                // Find the previous week's trend (the anchor)
-                const prevWeekIndex = weeklyData.findIndex(w => w.weekId === wKey) - 1;
-                // If previous week exists, use its trend as the anchor. Otherwise, use the current week's trend (for the starting week).
-                const anchorTrend = prevWeekIndex >= 0 ? weeklyData[prevWeekIndex].actual : weeklyData[0].actual;
-                
-                // Calculate difference in days from the week anchor's start date
-                const weekStartDateStr = parentWeek.entries[0].date;
-                const weekStart = new Date(weekStartDateStr);
-                const dayDiff = Math.ceil((dateObj.getTime() - weekStart.getTime()) / (1000 * 60 * 60 * 24));
-                
-                // Calculate daily target based on the anchor and the daily rate
-                dailyTarget = anchorTrend + (dailyRate * dayDiff);
+                const dayNum = new Date(dateStr).getDay(); 
+                const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
+                const weekStartTarget = parentWeek.target - rate;
+                const dailyProgress = (dayIndex + 1) / 7;
+                dailyTarget = weekStartTarget + (rate * dailyProgress);
                 targetFound = true;
             }
 
@@ -446,7 +379,6 @@ export default function App() {
                 target: targetFound ? dailyTarget : 0,
                 targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
                 targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
-                groupKey: wKey 
             };
         }).filter(p => p.target !== 0); 
     }
@@ -454,14 +386,14 @@ export default function App() {
 
   // --- ACTIONS ---
   const resetSettingsForm = () => {
-      if (settings) {
+     if (settings) {
         const wRate = settings.weeklyRate || 0;
         const isNegative = wRate < 0;
         const absRate = Math.abs(wRate);
         setGoalType(isNegative ? 'lose' : 'gain');
         setWeeklyRate(absRate.toString());
         setMonthlyRate((absRate * 4.345).toFixed(2));
-      }
+     }
   };
 
   const handleNavigation = (targetView: 'dashboard' | 'settings') => {
@@ -489,7 +421,7 @@ export default function App() {
     if (!weightInput || !user) return;
     try {
       const sanitizedWeight = parseFloat(weightInput.replace(',', '.'));
-      // Use dateInput as the document ID to allow updating the same day's entry
+      // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
         weight: sanitizedWeight,
         date: dateInput,
@@ -498,8 +430,7 @@ export default function App() {
       setWeightInput('');
     } catch (err) {
       console.error("Error adding weight:", err);
-      // In a production app, use a custom modal instead of alert
-      console.log("Error saving."); 
+      alert("Error saving.");
     }
   };
 
@@ -511,6 +442,7 @@ export default function App() {
       if (goalType === 'lose') rate = -Math.abs(rate);
       else rate = Math.abs(rate);
 
+      // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
         weeklyRate: rate,
         updatedAt: serverTimestamp()
@@ -522,10 +454,10 @@ export default function App() {
   };
 
   const handleDeleteEntry = async (id: string) => {
-    // In a production app, use a custom modal instead of alert
-    if (!window.confirm("Delete this entry?")) return; 
+    if (!confirm("Delete this entry?")) return;
     if (!user) return;
     try {
+      // @ts-ignore
       await deleteDoc(doc(db, 'users', user.uid, 'weights', id));
     } catch (err) {
       console.error("Delete error", err);
@@ -549,37 +481,45 @@ export default function App() {
 
   // --- ADVICE LOGIC ---
   const getAdvice = () => {
-    if (!settings || weeklyData.length < 2) return null;
+    if (!settings) return null;
     
     // Convert to absolute target to compare magnitude
-    const targetSigned = settings.weeklyRate;
+    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
+    
+    // We analyze the gap. 
+    // If GAINING: Target 0.2. 
+    //   If rate < 0.1 (Too slow/Stall) -> Add Cals
+    //   If rate > 0.35 (Too fast) -> Cut Cals
+    // If LOSING: Target -0.5. (We treat magnitude)
+    //   If rate > -0.2 (e.g. -0.1 or +0.1) -> Loss is too slow -> Cut Cals
+    //   If rate < -0.8 -> Loss is too fast -> Add Cals
+
     const rate = currentTrendRate;
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
     
-    // Deviation check
-    const deviation = rate - targetSigned;
-
-    if (Math.abs(deviation) <= RATE_TOLERANCE_GREEN) {
-        status = 'ok';
-    } else if (targetSigned >= 0) { // Goal: Gain or Maintain
-        if (deviation < -RATE_TOLERANCE_GREEN) { status = 'slow'; action = 'add'; } // Gaining too slow (or losing)
-        else if (deviation > RATE_TOLERANCE_ORANGE) { status = 'fast'; action = 'remove'; } // Gaining too fast
-    } else { // Goal: Lose
-        if (deviation > RATE_TOLERANCE_GREEN) { status = 'slow'; action = 'remove'; } // Losing too slow (or gaining)
-        else if (deviation < -RATE_TOLERANCE_ORANGE) { status = 'fast'; action = 'add'; } // Losing too fast
+    if (goalType === 'gain') {
+        if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
+        else if (rate > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
+    } else {
+        // Lose logic (rates are negative)
+        const targetSigned = -targetAbs;
+        // e.g. Target -0.5. Rate -0.1. (-0.1 > -0.4) -> Slow loss
+        if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
+        // e.g. Target -0.5. Rate -0.8. (-0.8 < -0.65) -> Fast loss
+        else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
     }
 
-    if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current habits.' };
+    if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
     
     if (action === 'add') return { 
         color: 'bg-amber-500/10 border-amber-500/20 text-amber-200', 
-        text: targetSigned >= 0 ? 'Stalling. Consider adding ~250 kcal/day.' : 'Losing too fast. Consider adding ~200 kcal/day.' 
+        text: goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.' 
     };
     
     if (action === 'remove') return { 
         color: 'bg-rose-500/10 border-rose-500/20 text-rose-200', 
-        text: targetSigned >= 0 ? 'Gaining too fast. Consider removing ~200 kcal/day.' : 'Stalling. Consider removing ~250 kcal/day.' 
+        text: goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.' 
     };
     
     return null;
@@ -651,7 +591,7 @@ export default function App() {
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
     
-    // Padding
+    // Padding: Left maintained at 32 for Y-axis text
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
@@ -682,46 +622,12 @@ export default function App() {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    // --- AREA POLYGONS (TUNNEL) ---
-    const tunnelPolygons: string[] = [];
-    
-    let currentPolyPoints: number[] = [];
-    let lastGroupKey = '';
+    // --- AREA POINTS ---
+    const areaPoints = [
+        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
+        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
+    ].join(' ');
 
-    data.forEach((d, i) => {
-        const shouldBreak = 
-            (mode === 'daily' && d.groupKey !== lastGroupKey && lastGroupKey !== '') ||
-            (mode === 'weekly' && d.isGap);
-        
-        if (shouldBreak) {
-             // Close previous polygon
-             if (currentPolyPoints.length > 0) {
-                 const indices = currentPolyPoints;
-                 const polyString = [
-                    ...indices.map(idx => `${getX(idx)},${getY(data[idx].targetUpper)}`),
-                    ...indices.slice().reverse().map(idx => `${getX(idx)},${getY(data[idx].targetLower)}`)
-                 ].join(' ');
-                 tunnelPolygons.push(polyString);
-                 currentPolyPoints = [];
-             }
-        }
-
-        currentPolyPoints.push(i);
-        lastGroupKey = d.groupKey;
-    });
-
-    // Flush last polygon
-    if (currentPolyPoints.length > 0) {
-          const indices = currentPolyPoints;
-          const polyString = [
-            ...indices.map(idx => `${getX(idx)},${getY(data[idx].targetUpper)}`),
-            ...indices.slice().reverse().map(idx => `${getX(idx)},${getY(data[idx].targetLower)}`)
-          ].join(' ');
-          tunnelPolygons.push(polyString);
-    }
-
-
-    // --- TREND LINE ---
     let trendPath = '';
     if (count > 1) {
         let lastValidT = -1;
@@ -731,12 +637,8 @@ export default function App() {
             const y = getY(d.trend);
             if (lastValidT === -1) trendPath += `M ${x},${y} `;
             else {
-                // If the next data point is too far away, start a new path segment
-                const prevDate = new Date(data[lastValidT].label);
-                const currDate = new Date(d.label);
-                const daysDifference = Math.ceil(Math.abs(currDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24));
-                
-                if (daysDifference > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
+                const distance = i - lastValidT;
+                if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
                 else trendPath += `L ${x},${y} `; 
             }
             lastValidT = i;
@@ -744,6 +646,7 @@ export default function App() {
     }
 
     // --- SMART AXIS LOGIC ---
+    // Minimum pixels required between two X-axis labels
     const minLabelSpacing = 35; 
     let lastRenderedX = -999;
     const lastPointX = getX(data.length - 1);
@@ -755,7 +658,7 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
-          {/* HORIZONTAL GRID */}
+          {/* HORIZONTAL GRID & Y-AXIS LABELS (Always Visible) */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
@@ -766,19 +669,16 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TUNNEL POLYGONS (Multiple Segments) */}
-          {tunnelPolygons.map((poly, idx) => (
-              <polygon key={idx} points={poly} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
-          ))}
+          {/* TUNNEL */}
+          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           
           {/* TREND LINE */}
           <defs>
             <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
                 {data.map((d, i) => {
                     if (d.trend === null) return null;
-                    // Determine trend color based on adherence to tunnel
-                    const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
                     const offset = (i / denominator) * 100;
+                    const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
                     return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#10b981"} />;
                 })}
             </linearGradient>
@@ -795,24 +695,24 @@ export default function App() {
              const py = getY(d.actual);
              
              return (
-               <g key={i}>
-                 <circle 
-                     cx={px} 
-                     cy={py} 
-                     r={expanded ? 3.5 : 2} 
-                     fill="#94a3b8" 
-                     opacity={expanded ? "0.9" : "0.6"}
-                 />
-                 {expanded && (
-                     <text x={px} y={py - 12} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
-                         {d.actual.toFixed(1)}
-                     </text>
-                 )}
-               </g>
+                <g key={i}>
+                    <circle 
+                        cx={px} 
+                        cy={py} 
+                        r={expanded ? 3.5 : 2} 
+                        fill="#94a3b8" 
+                        opacity={expanded ? "0.9" : "0.6"}
+                    />
+                    {expanded && (
+                        <text x={px} y={py - 12} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
+                            {d.actual.toFixed(1)}
+                        </text>
+                    )}
+                </g>
              );
-           })}
+          })}
 
-          {/* X-AXIS LABELS */}
+          {/* SMART X-AXIS LABELS */}
           {data.map((d, i) => {
              const xPos = getX(i);
              const isFirst = i === 0;
@@ -821,25 +721,38 @@ export default function App() {
              let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
 
-             if (isFirst) { shouldRender = true; anchor = "start"; }
-             else if (isLast) { shouldRender = true; anchor = "end"; }
+             // 1. Always render First
+             if (isFirst) {
+                 shouldRender = true;
+                 anchor = "start";
+             }
+             // 2. Always render Last
+             else if (isLast) {
+                 shouldRender = true;
+                 anchor = "end";
+             }
+             // 3. Render intermediate if space permits (Buffer Zone Logic)
              else {
                  const distToLast = lastPointX - xPos;
                  const distToPrev = xPos - lastRenderedX;
+                 
+                 // Must clear BOTH the Previous label AND the Final label
                  if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
                      shouldRender = true;
                  }
              }
 
              if (!shouldRender) return null;
+
+             // Update tracker only if we actually rendered
              lastRenderedX = xPos;
 
              return (
-               <text key={i} x={xPos} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
-                   {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
-               </text>
+                <text key={i} x={xPos} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
+                    {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
+                </text>
              );
-           })}
+          })}
         </svg>
       </div>
     );
@@ -889,231 +802,231 @@ export default function App() {
 
       <div className="flex-1 overflow-y-auto w-full">
         <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-full flex flex-col' : 'space-y-5'}`}>
-          
-          {view === 'dashboard' && (
-          <>
-              <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                      <p className="text-slate-400 text-xs font-medium uppercase mb-1">Trend Weight</p>
-                      <p className="text-2xl font-bold text-white truncate">
-                      {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
-                      <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
-                      </p>
-                  </div>
-                  <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                      <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Rate (7D)</p>
-                      <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentTrendRate)}`}>
-                      {currentTrendRate > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                      {Math.abs(currentTrendRate).toFixed(2)} kg
-                      </div>
-                  </div>
-              </div>
+            
+            {view === 'dashboard' && (
+            <>
+                <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Trend Weight</p>
+                        <p className="text-2xl font-bold text-white truncate">
+                        {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
+                        <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
+                        </p>
+                    </div>
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
+                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Rate</p>
+                        <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentTrendRate)}`}>
+                        {currentTrendRate > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                        {Math.abs(currentTrendRate).toFixed(2)} kg
+                        </div>
+                    </div>
+                </div>
 
-              {advice && (
-                  <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color}`}>
-                      <Utensils size={18} className="shrink-0 mt-0.5" />
-                      <span className="text-sm font-semibold">{advice.text}</span>
-                  </div>
-              )}
+                {advice && (
+                    <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color}`}>
+                        <Utensils size={18} className="shrink-0 mt-0.5" />
+                        <span className="text-sm font-semibold">{advice.text}</span>
+                    </div>
+                )}
 
-              <section className="flex flex-col" ref={containerRef}>
-                  <div className="flex justify-between items-end mb-2 px-1 gap-1">
-                      <div className="shrink-0">
-                          <div className="flex items-center gap-1">
-                              <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                              <button 
-                                  onClick={() => setShowExplanation(!showExplanation)}
-                                  className="text-slate-500 hover:text-blue-400 transition-colors"
-                              >
-                                  <Info size={13} />
-                              </button>
-                          </div>
-                          <p className="text-[10px] font-normal text-slate-500">Tunnel: $\pm${TARGET_TOLERANCE}kg</p>
-                      </div>
-                      
-                      <div className="flex gap-1 shrink-0">
-                           <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
-                               <button onClick={() => setFilterRange('1M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
-                               <button onClick={() => setFilterRange('3M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
-                               <button onClick={() => setFilterRange('ALL')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
-                           </div>
-                           
-                           <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
-                               <button onClick={() => setChartMode('weekly')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
-                               <button onClick={() => setChartMode('daily')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
-                           </div>
-                      </div>
-                  </div>
+                <section className="flex flex-col" ref={containerRef}>
+                    <div className="flex justify-between items-end mb-2 px-1 gap-1">
+                        <div className="shrink-0">
+                            <div className="flex items-center gap-1">
+                                <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
+                                <button 
+                                    onClick={() => setShowExplanation(!showExplanation)}
+                                    className="text-slate-500 hover:text-blue-400 transition-colors"
+                                >
+                                    <Info size={13} />
+                                </button>
+                            </div>
+                            <p className="text-[10px] font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
+                        </div>
+                        
+                        <div className="flex gap-1 shrink-0">
+                             <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
+                                <button onClick={() => setFilterRange('1M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
+                                <button onClick={() => setFilterRange('3M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
+                                <button onClick={() => setFilterRange('ALL')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
+                            </div>
+                            
+                            <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
+                                <button onClick={() => setChartMode('weekly')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
+                                <button onClick={() => setChartMode('daily')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
+                            </div>
+                        </div>
+                    </div>
 
-                  <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} />
-                  
-                  <div 
-                      className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
-                      style={{ touchAction: 'none' }} 
-                  >
-                      <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
-                          <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
-                          <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>Tunnel</div>
-                          <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
-                      </div>
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} />
+                    
+                    <div 
+                        className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
+                        style={{ touchAction: 'none' }} 
+                    >
+                        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>Tunnel</div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
+                        </div>
 
-                      {showExplanation && (
-                          <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
-                              <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
-                                  <Info size={12} className="text-blue-500" /> Dynamic Tunnel Logic
-                              </div>
-                              <p>The green tunnel dynamically re-anchors to your current Exponential Moving Average (EMA) trend at the start of each period, applying the target rate forward. This prevents the tunnel from retaining past errors, keeping your goal path realistic and healthy.</p>
-                          </div>
-                      )}
+                        {showExplanation && (
+                            <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
+                                <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
+                                    <Info size={12} className="text-blue-500" /> EMA model
+                                </div>
+                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
+                            </div>
+                        )}
 
-                      <div 
-                          className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg"
-                          onMouseDown={handleDragStart}
-                          onTouchStart={handleDragStart}
-                          onClick={toggleExpand}
-                      >
-                          <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
-                      </div>
-                  </div>
-              </section>
+                        <div 
+                            className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg"
+                            onMouseDown={handleDragStart}
+                            onTouchStart={handleDragStart}
+                            onClick={toggleExpand}
+                        >
+                            <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
+                        </div>
+                    </div>
+                </section>
 
-              <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
-                  <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
-                  <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
-                      <div className="flex gap-2">
-                          <input 
-                              type="text" inputMode="decimal" placeholder="0.0" required 
-                              className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
-                              value={weightInput} 
-                              onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
-                          />
-                          <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
-                      </div>
-                      <div className="relative">
-                          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
-                          <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
-                      </div>
-                  </form>
-              </div>
+                <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
+                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
+                    <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
+                        <div className="flex gap-2">
+                            <input 
+                                type="text" inputMode="decimal" placeholder="0.0" required 
+                                className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
+                                value={weightInput} 
+                                onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
+                            />
+                            <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
+                        </div>
+                        <div className="relative">
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
+                            <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
+                        </div>
+                    </form>
+                </div>
 
-              <section>
-                  <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
-                  <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
-                      <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                      <div>Week</div>
-                      <div className="text-right">Trend</div>
-                      <div className="text-right pr-4">$\Delta$</div> 
-                      <div className="w-5"></div>
-                      </div>
-                      <div className="divide-y divide-slate-800">
-                      {weeklyData.slice().reverse().map((item) => {
-                          const isExpanded = expandedWeeks.includes(item.weekId);
-                          const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
-                          return (
-                          <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
-                              <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
-                              <div className="flex flex-col">
-                                  <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
-                                  <span className="text-[10px] text-slate-500">{item.count} entries</span>
-                              </div>
-                              <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
-                              <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
-                                  {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
-                              </div>
-                              <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
-                              </div>
-                              {isExpanded && (
-                              <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                                  <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
-                                      <span>Daily Entries</span>
-                                      <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Trend: On Track' : 'Trend: Deviated'}</span>
-                                  </div>
-                                  <div className="space-y-2">
-                                  {item.entries.map((entry) => (
-                                      <div key={entry.id} className="flex justify-between items-center text-sm">
-                                      <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
-                                      <div className="flex items-center gap-3">
-                                          <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                                          <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
-                                      </div>
-                                      </div>
-                                  ))}
-                                  </div>
-                              </div>
-                              )}
-                          </div>
-                          );
-                      })}
-                      </div>
-                  </div>
-              </section>
-          </>
-          )}
+                <section>
+                    <h2 className="text-sm font-semibold text-slate-300 mb-3 px-1">History</h2>
+                    <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
+                        <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        <div>Week</div>
+                        <div className="text-right">Trend</div>
+                        <div className="text-right pr-4">Δ</div> 
+                        <div className="w-5"></div>
+                        </div>
+                        <div className="divide-y divide-slate-800">
+                        {weeklyData.slice().reverse().map((item) => {
+                            const isExpanded = expandedWeeks.includes(item.weekId);
+                            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
+                            return (
+                            <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
+                                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
+                                <div className="flex flex-col">
+                                    <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
+                                    <span className="text-[10px] text-slate-500">{item.count} entries</span>
+                                </div>
+                                <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
+                                <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
+                                    {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
+                                </div>
+                                <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
+                                </div>
+                                {isExpanded && (
+                                <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
+                                    <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
+                                        <span>Daily Entries</span>
+                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Trend: On Track' : 'Trend: Deviated'}</span>
+                                    </div>
+                                    <div className="space-y-2">
+                                    {item.entries.map((entry) => (
+                                        <div key={entry.id} className="flex justify-between items-center text-sm">
+                                        <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
+                                        <div className="flex items-center gap-3">
+                                            <span className="font-medium text-slate-300">{entry.weight} kg</span>
+                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
+                                        </div>
+                                        </div>
+                                    ))}
+                                    </div>
+                                </div>
+                                )}
+                            </div>
+                            );
+                        })}
+                        </div>
+                    </div>
+                </section>
+            </>
+            )}
 
-          {view === 'settings' && (
-          <div className="flex flex-col h-full">
-              <div className="flex items-center gap-2 mb-4 shrink-0">
-                  <button onClick={() => handleNavigation('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
-                      <ChevronRight className="rotate-180 text-slate-400" size={20} />
-                  </button>
-                  <h2 className="font-bold text-lg text-white">Plan Settings</h2>
-              </div>
+            {view === 'settings' && (
+            <div className="flex flex-col h-full">
+                <div className="flex items-center gap-2 mb-4 shrink-0">
+                    <button onClick={() => handleNavigation('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
+                        <ChevronRight className="rotate-180 text-slate-400" size={20} />
+                    </button>
+                    <h2 className="font-bold text-lg text-white">Plan Settings</h2>
+                </div>
 
-              <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-6 flex-1 flex flex-col">
-                  <div className="flex bg-slate-800 p-1 rounded-xl mb-2">
-                      <button 
-                          type="button"
-                          onClick={() => setGoalType('gain')}
-                          className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'gain' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
-                      >
-                          Gain Weight (+)
-                      </button>
-                      <button 
-                          type="button"
-                          onClick={() => setGoalType('lose')}
-                          className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'lose' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
-                      >
-                          Lose Weight (-)
-                      </button>
-                  </div>
+                <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-6 flex-1 flex flex-col">
+                    <div className="flex bg-slate-800 p-1 rounded-xl mb-2">
+                        <button 
+                            type="button"
+                            onClick={() => setGoalType('gain')}
+                            className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'gain' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
+                        >
+                            Gain Weight (+)
+                        </button>
+                        <button 
+                            type="button"
+                            onClick={() => setGoalType('lose')}
+                            className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'lose' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
+                        >
+                            Lose Weight (-)
+                        </button>
+                    </div>
 
-                  <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Weekly Rate (kg/wk)</label>
-                      <input 
-                          type="text" inputMode="decimal" required 
-                          value={weeklyRate} 
-                          onChange={(e) => handleRateChange(e.target.value, 'weekly')}
-                          className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
-                          placeholder="0.2"
-                      />
-                  </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Weekly Rate (kg/wk)</label>
+                        <input 
+                            type="text" inputMode="decimal" required 
+                            value={weeklyRate} 
+                            onChange={(e) => handleRateChange(e.target.value, 'weekly')}
+                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                            placeholder="0.2"
+                        />
+                    </div>
 
-                  <div>
-                      <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Monthly Rate (kg/mo)</label>
-                      <input 
-                          type="text" inputMode="decimal" required 
-                          value={monthlyRate} 
-                          onChange={(e) => handleRateChange(e.target.value, 'monthly')}
-                          className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
-                          placeholder="0.87"
-                      />
-                  </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Monthly Rate (kg/mo)</label>
+                        <input 
+                            type="text" inputMode="decimal" required 
+                            value={monthlyRate} 
+                            onChange={(e) => handleRateChange(e.target.value, 'monthly')}
+                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                            placeholder="0.87"
+                        />
+                    </div>
 
-                  <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
-                      <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
-                      <p className="leading-relaxed">
-                          The chart tunnel is $\pm${TARGET_TOLERANCE}kg tolerance from your smoothed Trend Weight.
-                      </p>
-                  </div>
+                    <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
+                        <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
+                        <p className="leading-relaxed">
+                            The chart tunnel is ±{TARGET_TOLERANCE}kg tolerance from your smoothed Trend Weight.
+                        </p>
+                    </div>
 
-                  <div className="pt-4 mt-auto">
-                      <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
-                          Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
-                      </button>
-                  </div>
-              </form>
-          </div>
-          )}
+                    <div className="pt-4 mt-auto">
+                        <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
+                            Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
+                        </button>
+                    </div>
+                </form>
+            </div>
+            )}
         </div>
       </div>
     </div>
