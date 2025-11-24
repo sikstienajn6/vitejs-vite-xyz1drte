@@ -101,13 +101,19 @@ interface ChartPoint {
 }
 
 // --- Helper Functions ---
-const getWeekKey = (date: string) => {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
-  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
+const getWeekKey = (dateStr: string) => {
+  // Parse YYYY-MM-DD strictly as UTC to avoid timezone shifts
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  
+  // ISO Week Logic (Thursday determines the week)
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  
+  return `${date.getUTCFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
 const formatDate = (dateString: string) => {
@@ -277,18 +283,19 @@ export default function App() {
       };
     });
 
+    // --- FIX APPLIED HERE ---
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
+            // First week establishes the baseline
             processedWeeks[i].target = processedWeeks[i].actual;
         } else {
             const prev = processedWeeks[i-1];
-            const dist = Math.abs(prev.actual - prev.target);
             
-            if (dist <= TARGET_TOLERANCE) {
-                processedWeeks[i].target = prev.target + rate;
-            } else {
-                processedWeeks[i].target = prev.actual + rate;
-            }
+            // LOGIC FIX:
+            // We ignore whether they were "in the tunnel" previously.
+            // The user wants the tunnel to ALWAYS reset to the previous week's ACTUAL trend.
+            // So the target for Week X is simply (Week X-1 Actual) + Rate.
+            processedWeeks[i].target = prev.actual + rate;
             
             processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
             processedWeeks[i].hasPrev = true;
@@ -316,7 +323,6 @@ export default function App() {
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
 
-
   // --- CHART DATA PREP ---
   const finalChartData = useMemo<ChartPoint[]>(() => {
     if (weeklyData.length === 0 || !settings) return [];
@@ -325,7 +331,6 @@ export default function App() {
     let startDate = new Date('2000-01-01'); 
     const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
 
-    // Filter Logic
     if (filterRange === '1M') {
         startDate = new Date();
         startDate.setMonth(now.getMonth() - 1);
@@ -339,105 +344,66 @@ export default function App() {
     if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
     if (startDate > now) startDate = earliestDataDate;
 
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-
     if (chartMode === 'weekly') {
-        // STRATEGY: Generate 2 points per week (Start & End) to visualize the slope correctly
-        // independent of the previous week's position.
         return weeklyData
             .filter(w => new Date(w.entries[0].date) >= startDate)
-            .flatMap((w) => {
-                // Determine where this week's tunnel SHOULD start
-                // If it's a reset week (no prev or deviated), it starts at its own base (actual weight)
-                // If it's continuous, it technically starts where the previous target ended.
-                // Mathematically: TargetEnd = Anchor + Rate. Therefore Anchor = TargetEnd - Rate.
-                const startTarget = w.target - rate;
-                const endTarget = w.target;
-
-                const startPoint: ChartPoint = {
-                    label: '', // Empty label for the start point to avoid clutter
-                    weekLabel: '', 
-                    actual: null, // Don't show data point for start of week
-                    trend: null,
-                    target: startTarget,
-                    targetUpper: startTarget + TARGET_TOLERANCE,
-                    targetLower: startTarget - TARGET_TOLERANCE,
-                };
-
-                const endPoint: ChartPoint = {
-                    label: w.weekId, 
-                    weekLabel: w.weekLabel,
-                    actual: w.rawAvg, 
-                    trend: w.actual, 
-                    target: endTarget,
-                    targetUpper: endTarget + TARGET_TOLERANCE,
-                    targetLower: endTarget - TARGET_TOLERANCE,
-                };
-
-                // If this is a "Reset" week (deviation occurred), we ideally want a visual break 
-                // or a vertical drop. The flatMap naturally creates a "jump" from 
-                // Prev_End -> Curr_Start. 
-                return [startPoint, endPoint];
-            });
+            .map(w => ({
+                label: w.weekId, 
+                weekLabel: w.weekLabel,
+                actual: w.rawAvg, 
+                trend: w.actual, 
+                target: w.target,
+                targetUpper: w.target + TARGET_TOLERANCE,
+                targetLower: w.target - TARGET_TOLERANCE,
+            }));
     } else {
-        // DAILY MODE
+        const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
         const allDays = getDaysArray(startDate, now);
 
-        const points: ChartPoint[] = [];
-
-        allDays.forEach((dateStr, index) => {
+        return allDays.map(dateStr => {
             const wKey = getWeekKey(dateStr);
             const parentWeek = weekMap.get(wKey);
             
             let dailyTarget = 0;
             let targetFound = false;
 
-            // Detect if we just crossed a week boundary that required a reset
-            let isResetBoundary = false;
-            if (index > 0) {
-                const prevDate = allDays[index-1];
-                const prevWKey = getWeekKey(prevDate);
-                if (prevWKey !== wKey && parentWeek && !parentWeek.hasPrev) {
-                    isResetBoundary = true;
-                }
-            }
-
-            if (isResetBoundary) {
-                // Insert a "break" point to stop the line from sloping down diagonally
-                points.push({
-                    label: '',
-                    actual: null,
-                    trend: null,
-                    target: 0, // 0 target triggers the gap logic in many charts, or use null if supported
-                    targetUpper: 0,
-                    targetLower: 0,
-                });
-            }
-
             if (parentWeek) {
-                const dayNum = new Date(dateStr).getDay(); 
-                const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
-                // Calculate daily progress from the Start Anchor, not the previous week end
+                // ISO Day: 1 (Mon) - 7 (Sun)
+                const dObj = new Date(dateStr);
+                const dayNum = dObj.getDay() || 7; 
+                const dayIndex = dayNum - 1; // 0 (Mon) to 6 (Sun)
+                
+                // MATH FIX:
+                // parentWeek.target is the target value for the END/AVERAGE of the current week.
+                // We derived it as: prevWeek.actual + rate.
+                // Therefore, the START of this week's tunnel is prevWeek.actual.
+                // Which equals: parentWeek.target - rate.
                 const weekStartTarget = parentWeek.target - rate;
+                
+                // Interpolate from Start to End of the week
                 const dailyProgress = (dayIndex + 1) / 7;
                 dailyTarget = weekStartTarget + (rate * dailyProgress);
                 targetFound = true;
             }
 
-            if (targetFound) {
-                points.push({
-                    label: dateStr,
-                    actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
-                    trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
-                    target: dailyTarget,
-                    targetUpper: dailyTarget + TARGET_TOLERANCE,
-                    targetLower: dailyTarget - TARGET_TOLERANCE,
-                });
-            }
-        });
-        return points;
+            // We only filter out points where we absolutely cannot calculate a target
+            // AND there is no actual data. If there is actual data, we plot it regardless.
+            const hasData = weightMap.has(dateStr);
+            const hasTrend = trendMap.has(dateStr);
+
+            if (!targetFound && !hasData && !hasTrend) return null;
+
+            return {
+                label: dateStr,
+                actual: hasData ? weightMap.get(dateStr)! : null,
+                trend: hasTrend ? trendMap.get(dateStr)! : null,
+                target: targetFound ? dailyTarget : 0,
+                targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
+                targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
+            };
+        }).filter((p): p is ChartPoint => p !== null); 
     }
   }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
 
