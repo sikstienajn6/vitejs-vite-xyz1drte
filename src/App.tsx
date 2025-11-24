@@ -88,6 +88,7 @@ interface WeeklySummary {
   delta: number;
   hasPrev: boolean;
   inTunnel: boolean; 
+  isReset: boolean; // New flag for visual discontinuity
 }
 
 interface ChartPoint {
@@ -98,6 +99,8 @@ interface ChartPoint {
     targetUpper: number;
     targetLower: number;
     weekLabel?: string;
+    groupKey: string; // Used to group segments (e.g., weekId)
+    isGap?: boolean; // Used in Weekly mode to force a break
 }
 
 // --- Helper Functions ---
@@ -273,7 +276,8 @@ export default function App() {
         target: 0, 
         delta: 0,
         hasPrev: false,
-        inTunnel: true 
+        inTunnel: true,
+        isReset: false
       };
     });
 
@@ -285,9 +289,13 @@ export default function App() {
             const dist = Math.abs(prev.actual - prev.target);
             
             if (dist <= TARGET_TOLERANCE) {
+                // Keep Tunnel
                 processedWeeks[i].target = prev.target + rate;
+                processedWeeks[i].isReset = false;
             } else {
+                // Reset Tunnel
                 processedWeeks[i].target = prev.actual + rate;
+                processedWeeks[i].isReset = true;
             }
             
             processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
@@ -349,6 +357,8 @@ export default function App() {
                 target: w.target,
                 targetUpper: w.target + TARGET_TOLERANCE,
                 targetLower: w.target - TARGET_TOLERANCE,
+                groupKey: 'weekly-main',
+                isGap: w.isReset // Pass reset flag to create gap
             }));
     } else {
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
@@ -366,6 +376,7 @@ export default function App() {
             if (parentWeek) {
                 const dayNum = new Date(dateStr).getDay(); 
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
+                // Calculate week start target backwards from the End-of-Week target
                 const weekStartTarget = parentWeek.target - rate;
                 const dailyProgress = (dayIndex + 1) / 7;
                 dailyTarget = weekStartTarget + (rate * dailyProgress);
@@ -379,6 +390,7 @@ export default function App() {
                 target: targetFound ? dailyTarget : 0,
                 targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
                 targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
+                groupKey: wKey // Group by Week ID to create separate polygons
             };
         }).filter(p => p.target !== 0); 
     }
@@ -485,15 +497,6 @@ export default function App() {
     
     // Convert to absolute target to compare magnitude
     const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
-    
-    // We analyze the gap. 
-    // If GAINING: Target 0.2. 
-    //   If rate < 0.1 (Too slow/Stall) -> Add Cals
-    //   If rate > 0.35 (Too fast) -> Cut Cals
-    // If LOSING: Target -0.5. (We treat magnitude)
-    //   If rate > -0.2 (e.g. -0.1 or +0.1) -> Loss is too slow -> Cut Cals
-    //   If rate < -0.8 -> Loss is too fast -> Add Cals
-
     const rate = currentTrendRate;
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
@@ -502,11 +505,8 @@ export default function App() {
         if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
         else if (rate > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
     } else {
-        // Lose logic (rates are negative)
         const targetSigned = -targetAbs;
-        // e.g. Target -0.5. Rate -0.1. (-0.1 > -0.4) -> Slow loss
         if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        // e.g. Target -0.5. Rate -0.8. (-0.8 < -0.65) -> Fast loss
         else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
     }
 
@@ -591,7 +591,7 @@ export default function App() {
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
     
-    // Padding: Left maintained at 32 for Y-axis text
+    // Padding
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
@@ -622,12 +622,47 @@ export default function App() {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    // --- AREA POINTS ---
-    const areaPoints = [
-        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
-        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
-    ].join(' ');
+    // --- AREA POLYGONS (TUNNEL) ---
+    // We group points to create discontinuous polygons
+    const tunnelPolygons: string[] = [];
+    
+    let currentPolyPoints: number[] = [];
+    let lastGroupKey = '';
 
+    data.forEach((d, i) => {
+        const shouldBreak = 
+            (mode === 'daily' && d.groupKey !== lastGroupKey && lastGroupKey !== '') ||
+            (mode === 'weekly' && d.isGap);
+        
+        if (shouldBreak) {
+             // Close previous polygon
+             if (currentPolyPoints.length > 0) {
+                 const indices = currentPolyPoints;
+                 const polyString = [
+                    ...indices.map(idx => `${getX(idx)},${getY(data[idx].targetUpper)}`),
+                    ...indices.slice().reverse().map(idx => `${getX(idx)},${getY(data[idx].targetLower)}`)
+                 ].join(' ');
+                 tunnelPolygons.push(polyString);
+                 currentPolyPoints = [];
+             }
+        }
+
+        currentPolyPoints.push(i);
+        lastGroupKey = d.groupKey;
+    });
+
+    // Flush last polygon
+    if (currentPolyPoints.length > 0) {
+         const indices = currentPolyPoints;
+         const polyString = [
+            ...indices.map(idx => `${getX(idx)},${getY(data[idx].targetUpper)}`),
+            ...indices.slice().reverse().map(idx => `${getX(idx)},${getY(data[idx].targetLower)}`)
+         ].join(' ');
+         tunnelPolygons.push(polyString);
+    }
+
+
+    // --- TREND LINE ---
     let trendPath = '';
     if (count > 1) {
         let lastValidT = -1;
@@ -646,7 +681,6 @@ export default function App() {
     }
 
     // --- SMART AXIS LOGIC ---
-    // Minimum pixels required between two X-axis labels
     const minLabelSpacing = 35; 
     let lastRenderedX = -999;
     const lastPointX = getX(data.length - 1);
@@ -658,7 +692,7 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
-          {/* HORIZONTAL GRID & Y-AXIS LABELS (Always Visible) */}
+          {/* HORIZONTAL GRID */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
@@ -669,8 +703,10 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TUNNEL */}
-          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
+          {/* TUNNEL POLYGONS (Multiple Segments) */}
+          {tunnelPolygons.map((poly, idx) => (
+              <polygon key={idx} points={poly} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
+          ))}
           
           {/* TREND LINE */}
           <defs>
@@ -712,7 +748,7 @@ export default function App() {
              );
           })}
 
-          {/* SMART X-AXIS LABELS */}
+          {/* X-AXIS LABELS */}
           {data.map((d, i) => {
              const xPos = getX(i);
              const isFirst = i === 0;
@@ -721,30 +757,17 @@ export default function App() {
              let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
 
-             // 1. Always render First
-             if (isFirst) {
-                 shouldRender = true;
-                 anchor = "start";
-             }
-             // 2. Always render Last
-             else if (isLast) {
-                 shouldRender = true;
-                 anchor = "end";
-             }
-             // 3. Render intermediate if space permits (Buffer Zone Logic)
+             if (isFirst) { shouldRender = true; anchor = "start"; }
+             else if (isLast) { shouldRender = true; anchor = "end"; }
              else {
                  const distToLast = lastPointX - xPos;
                  const distToPrev = xPos - lastRenderedX;
-                 
-                 // Must clear BOTH the Previous label AND the Final label
                  if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
                      shouldRender = true;
                  }
              }
 
              if (!shouldRender) return null;
-
-             // Update tracker only if we actually rendered
              lastRenderedX = xPos;
 
              return (
