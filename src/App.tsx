@@ -33,7 +33,8 @@ import {
   LogOut,
   LogIn,
   Info,
-  Utensils
+  Utensils,
+  Check
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -114,6 +115,21 @@ const getWeekKey = (date: string) => {
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
+const getCurrentWeekKey = () => {
+  const today = new Date();
+  return getWeekKey(today.toISOString().split('T')[0]);
+};
+
+const getLastSundayWeekKey = () => {
+  const today = new Date();
+  const dayOfWeek = today.getDay();
+  // Get the most recent Sunday
+  const daysSinceSunday = dayOfWeek === 0 ? 0 : dayOfWeek;
+  const lastSunday = new Date(today);
+  lastSunday.setDate(today.getDate() - daysSinceSunday);
+  return getWeekKey(lastSunday.toISOString().split('T')[0]);
+};
+
 const formatDate = (dateString: string) => {
   if (!dateString) return '';
   const d = new Date(dateString);
@@ -182,7 +198,8 @@ export default function App() {
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
-  const [monthlyRate, setMonthlyRate] = useState('0.87'); 
+  const [monthlyRate, setMonthlyRate] = useState('0.87');
+  const [dismissedAdviceWeeks, setDismissedAdviceWeeks] = useState<string[]>([]); 
 
   // --- AUTH ---
   useEffect(() => {
@@ -253,9 +270,22 @@ export default function App() {
       }
     }, (err) => console.error("Settings fetch error:", err));
 
+    // Fetch dismissed advice weeks
+    // @ts-ignore
+    const dismissedRef = doc(db, 'users', user.uid, 'settings', 'dismissedAdvice');
+    const unsubDismissed = onSnapshot(dismissedRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setDismissedAdviceWeeks(data?.weeks || []);
+      } else {
+        setDismissedAdviceWeeks([]);
+      }
+    }, (err) => console.error("Dismissed advice fetch error:", err));
+
     return () => {
       unsubWeights();
       unsubSettings();
+      unsubDismissed();
     };
   }, [user]);
 
@@ -609,7 +639,55 @@ export default function App() {
     return null;
   };
 
-  const advice = getAdvice();
+  const baseAdvice = getAdvice();
+  
+  // --- ADVICE DISPLAY LOGIC (Sunday-only with dismiss) ---
+  const shouldShowAdvice = useMemo(() => {
+    if (!baseAdvice || !settings || weeklyData.length === 0) return false;
+    
+    // Need at least one complete week of data
+    if (weeklyData.length < 1) return false;
+    
+    // Get the week key for the most recent Sunday
+    // Advice appears on Sunday for the week that just ended
+    const lastSundayWeekKey = getLastSundayWeekKey();
+    
+    // Check if this week's advice has been dismissed
+    if (dismissedAdviceWeeks.includes(lastSundayWeekKey)) {
+      return false;
+    }
+    
+    // Check if we have data for this week (need at least one week to show advice)
+    // The advice is for the most recent Sunday's week, so we need that week to exist in our data
+    const hasDataForWeek = weeklyData.some(w => w.weekId === lastSundayWeekKey);
+    if (!hasDataForWeek) {
+      // If we don't have data for the last Sunday's week yet, don't show
+      // This handles the case where it's Sunday but we haven't completed that week yet
+      return false;
+    }
+    
+    // Show advice (it appears on Sunday and stays until dismissed or next Sunday)
+    return true;
+  }, [baseAdvice, settings, weeklyData, dismissedAdviceWeeks]);
+  
+  const advice = shouldShowAdvice ? baseAdvice : null;
+  
+  // Handler to dismiss advice
+  const handleDismissAdvice = async () => {
+    if (!user) return;
+    const lastSundayWeekKey = getLastSundayWeekKey();
+    const updatedWeeks = [...dismissedAdviceWeeks, lastSundayWeekKey];
+    
+    try {
+      // @ts-ignore
+      await setDoc(doc(db, 'users', user.uid, 'settings', 'dismissedAdvice'), {
+        weeks: updatedWeeks,
+        updatedAt: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Error dismissing advice:", err);
+    }
+  };
 
   // --- DRAG & SNAP LOGIC ---
   const isDraggingRef = useRef(false);
@@ -1067,9 +1145,16 @@ export default function App() {
                 </div>
 
                 {advice && (
-                    <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color}`}>
+                    <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color} relative`}>
                         <Utensils size={18} className="shrink-0 mt-0.5" />
-                        <span className="text-sm font-semibold">{advice.text}</span>
+                        <span className="text-sm font-semibold flex-1">{advice.text}</span>
+                        <button
+                            onClick={handleDismissAdvice}
+                            className="shrink-0 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
+                            aria-label="Dismiss advice"
+                        >
+                            <Check size={16} className="opacity-70 hover:opacity-100" />
+                        </button>
                     </div>
                 )}
 
