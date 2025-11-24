@@ -677,7 +677,25 @@ export default function App() {
 
     // --- GRID LINES ---
     const gridCount = 5;
-    const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
+    const computeNiceStep = (targetStep: number) => {
+        if (targetStep <= 0) return 0.1;
+        const exponent = Math.floor(Math.log10(targetStep));
+        const base = Math.pow(10, exponent);
+        const candidates = [1, 2, 2.5, 5, 10];
+        for (const mult of candidates) {
+            const step = mult * base;
+            if (targetStep <= step) return step;
+        }
+        return 10 * base;
+    };
+    const desiredStep = range / (gridCount - 1);
+    const niceStep = computeNiceStep(desiredStep);
+    const gridMin = Math.floor(minVal / niceStep) * niceStep;
+    const gridMax = Math.ceil(maxVal / niceStep) * niceStep;
+    const gridStops: number[] = [];
+    for (let val = gridMin; val <= gridMax + niceStep / 2; val += niceStep) {
+        gridStops.push(parseFloat(val.toFixed(3)));
+    }
 
     // --- GRADIENT LOGIC (Smooth RGB Interpolation) ---
     const stops = useMemo(() => {
