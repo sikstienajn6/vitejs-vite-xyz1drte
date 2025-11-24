@@ -114,6 +114,7 @@ const formatDate = (dateString: string) => {
 
 const getDaysArray = (start: Date, end: Date) => {
     const arr = [];
+    // Clone start to avoid mutation issues
     for(let dt=new Date(start); dt<=end; dt.setDate(dt.getDate()+1)){
         arr.push(new Date(dt).toISOString().split('T')[0]);
     }
@@ -322,21 +323,27 @@ export default function App() {
     if (weeklyData.length === 0 || !settings) return [];
 
     const now = new Date();
+    // weights[0] is the LATEST date because of orderBy('date', 'desc')
+    const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
+    
+    // Determine the absolute end of the chart: max(now, latestEntry)
+    // This fixes the issue where future entries (or entries ahead of system clock) were cut off
+    const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
+
     let startDate = new Date('2000-01-01'); 
     const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
 
     if (filterRange === '1M') {
-        startDate = new Date();
-        startDate.setMonth(now.getMonth() - 1);
+        startDate = new Date(chartEndDate); // Relative to end date, not 'now'
+        startDate.setMonth(chartEndDate.getMonth() - 1);
     } else if (filterRange === '3M') {
-        startDate = new Date();
-        startDate.setMonth(now.getMonth() - 3);
+        startDate = new Date(chartEndDate);
+        startDate.setMonth(chartEndDate.getMonth() - 3);
     } else {
         startDate = earliestDataDate;
     }
 
     if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
-    if (startDate > now) startDate = earliestDataDate;
 
     if (chartMode === 'weekly') {
         return weeklyData
@@ -353,12 +360,12 @@ export default function App() {
             const orderedWeeks = weeklyData.slice().sort((a,b) => a.weekId.localeCompare(b.weekId));
             const weekIndexMap = new Map(orderedWeeks.map((w, idx) => [w.weekId, idx]));
             const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-            const allDays = getDaysArray(startDate, now);
             
-            // To prevent the line from breaking on days without data, we need to hold the last known trend.
-            // Find the starting trend value (closest value before start date)
+            // Generate days from start to the computed END date
+            const allDays = getDaysArray(startDate, chartEndDate);
+            
             let lastKnownTrend = 0;
-            // Scan backwards from startDate to find a seed value if possible
+            // Find a seed value for trend fill
             const startStr = startDate.toISOString().split('T')[0];
             const sortedDates = Array.from(trendMap.keys()).sort();
             for (let i = sortedDates.length - 1; i >= 0; i--) {
@@ -376,7 +383,6 @@ export default function App() {
               let dailyTarget = 0;
               let targetFound = false;
               
-              // Fill Trend Logic: Update if new data exists, else hold previous
               if (trendMap.has(dateStr)) {
                   lastKnownTrend = trendMap.get(dateStr)!;
               }
@@ -385,7 +391,6 @@ export default function App() {
                 const parentIdx = weekIndexMap.get(wKey)!;
                 const prevWeek = orderedWeeks[parentIdx - 1]; 
           
-                // determine the start of growth for this week
                 const startEMA = prevWeek ? prevWeek.actual : (parentWeek.actual - rate);
           
                 const dayNum = new Date(dateStr).getDay();
@@ -399,10 +404,10 @@ export default function App() {
               return {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
-                trend: lastKnownTrend, // Use filled trend
+                trend: lastKnownTrend, 
                 target: targetFound ? dailyTarget : 0
               };
-            }).filter(p => p.trend !== 0); // Only filter if we have absolutely no data history yet
+            }).filter(p => p.trend !== 0); 
     }
           
   }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
@@ -505,10 +510,7 @@ export default function App() {
   // --- ADVICE LOGIC ---
   const getAdvice = () => {
     if (!settings) return null;
-    
-    // Convert to absolute target to compare magnitude
     const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
-    
     const rate = currentTrendRate;
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
@@ -517,7 +519,6 @@ export default function App() {
         if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
         else if (rate > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
     } else {
-        // Lose logic (rates are negative)
         const targetSigned = -targetAbs;
         if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
         else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
@@ -634,26 +635,39 @@ export default function App() {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    // --- SLOPE COLOR CALCULATOR ---
-    const getSegmentColor = (curr: number, prev: number) => {
+    // --- GRADIENT COLOR CALCULATOR ---
+    const getPointColor = (index: number) => {
         if (!settings) return '#10b981';
         
-        // Calculate raw deviation between points (slope)
-        const slope = curr - prev; 
-        // Normalize Target Slope: Weekly Rate / 7 (approx daily) or 1 (weekly)
+        let slope = 0;
+        if (index > 0 && data[index].trend !== null && data[index-1].trend !== null) {
+            slope = (data[index].trend as number) - (data[index-1].trend as number);
+        }
+
         const divisor = mode === 'weekly' ? 1 : 7;
         const targetSlope = settings.weeklyRate / divisor;
-        
         const diff = Math.abs(slope - targetSlope);
         
-        // Thresholds (scaled to mode)
-        const tGreen = RATE_TOLERANCE_GREEN / divisor; // approx 0.014 daily
-        const tOrange = RATE_TOLERANCE_ORANGE / divisor; // approx 0.035 daily
+        const tGreen = RATE_TOLERANCE_GREEN / divisor; 
+        const tOrange = RATE_TOLERANCE_ORANGE / divisor; 
         
         if (diff <= tGreen) return '#10b981'; // Emerald (Good)
         if (diff <= tOrange) return '#fbbf24'; // Amber (Warning)
         return '#ef4444'; // Red (Bad)
     };
+
+    let trendPath = '';
+    if (count > 1) {
+        let lastValidT = -1;
+        data.forEach((d, i) => {
+            if (d.trend === null) return;
+            const x = getX(i);
+            const y = getY(d.trend);
+            if (lastValidT === -1) trendPath += `M ${x},${y} `;
+            else trendPath += `L ${x},${y} `; 
+            lastValidT = i;
+        });
+    }
 
     // --- SMART AXIS LOGIC ---
     const minLabelSpacing = 35; 
@@ -667,6 +681,16 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
+          <defs>
+             {/* GRADIENT DEFINITION */}
+             <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
+                {data.map((d, i) => {
+                   const offset = (i / denominator) * 100;
+                   return <stop key={i} offset={`${offset}%`} stopColor={getPointColor(i)} />;
+                })}
+             </linearGradient>
+          </defs>
+
           {/* HORIZONTAL GRID & Y-AXIS LABELS */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
@@ -678,29 +702,17 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* COLORED TREND LINES (Segments) */}
-          {count > 1 && data.map((d, i) => {
-              if (i === 0) return null;
-              const prev = data[i-1];
-              if (d.trend === null || prev.trend === null) return null;
-
-              const x1 = getX(i - 1);
-              const y1 = getY(prev.trend);
-              const x2 = getX(i);
-              const y2 = getY(d.trend);
-              
-              const color = getSegmentColor(d.trend, prev.trend);
-
-              return (
-                  <line 
-                    key={i} 
-                    x1={x1} y1={y1} x2={x2} y2={y2} 
-                    stroke={color} 
-                    strokeWidth={expanded ? "3" : "2"} 
-                    strokeLinecap="round" 
-                  />
-              );
-          })}
+          {/* TREND LINE WITH GRADIENT */}
+          {count > 1 && (
+             <path 
+                d={trendPath} 
+                fill="none" 
+                stroke="url(#trendGradient)" 
+                strokeWidth={expanded ? "3" : "2"} 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+             />
+          )}
 
           {/* DATA POINTS */}
           {data.map((d, i) => {
@@ -881,7 +893,7 @@ export default function App() {
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
                                     <Info size={12} className="text-blue-500" /> EMA model
                                 </div>
-                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations. <span className="text-emerald-400">Green</span> line segments mean your pace matches your goal. <span className="text-amber-400">Orange</span> or <span className="text-red-400">Red</span> means you are stalling or moving too fast.</p>
+                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations. <span className="text-emerald-400">Green</span> = optimal pace. <span className="text-amber-400">Orange</span>/<span className="text-red-400">Red</span> = stalling or moving too fast.</p>
                             </div>
                         )}
 
