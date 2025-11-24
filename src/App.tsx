@@ -115,11 +115,6 @@ const getWeekKey = (date: string) => {
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
-const getCurrentWeekKey = () => {
-  const today = new Date();
-  return getWeekKey(today.toISOString().split('T')[0]);
-};
-
 const getLastSundayWeekKey = () => {
   const today = new Date();
   const dayOfWeek = today.getDay();
