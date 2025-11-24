@@ -100,7 +100,7 @@ interface ProjectionData {
   anchorDate: Date;
   anchorVal: number;
   dailySlope: number;
-  weeklySlope: number; // Added explicit weekly rate for snapping
+  weeklySlope: number; 
 }
 
 // --- Helper Functions ---
@@ -719,11 +719,18 @@ export default function App() {
         });
     }
 
-    // --- PROJECTION PATH ---
+    // --- PROJECTION & TUNNEL PATHS ---
     let projectionPath = '';
+    let tunnelPath = '';
+    
     if (projection && data.length > 0) {
         const msPerDay = 86400000;
+        const tunnelTolerance = mode === 'weekly' ? 0.3 : 0.8;
         
+        // Arrays to store polygon points for tunnel
+        const upperPoints: [number, number][] = [];
+        const lowerPoints: [number, number][] = [];
+
         data.forEach((d, i) => {
              let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
@@ -742,9 +749,34 @@ export default function App() {
              const x = getX(i);
              const y = getY(idealY);
              
+             // Construct projection line path
              if (i === 0) projectionPath += `M ${x},${y} `;
              else projectionPath += `L ${x},${y} `;
+             
+             // Construct tunnel points (Upper/Lower based on +/- tolerance)
+             // Note: In SVG coords, lower value is higher on screen. 
+             // "Upper visual limit" corresponds to Higher Weight = idealY + tol
+             // "Lower visual limit" corresponds to Lower Weight = idealY - tol
+             const yUpper = getY(idealY + tunnelTolerance);
+             const yLower = getY(idealY - tunnelTolerance);
+             
+             upperPoints.push([x, yUpper]);
+             lowerPoints.push([x, yLower]);
         });
+        
+        // Build Closed Polygon for Tunnel
+        if (upperPoints.length > 0) {
+            tunnelPath = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
+            // Top edge
+            for (let k = 1; k < upperPoints.length; k++) {
+                tunnelPath += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
+            }
+            // Bottom edge (reverse order)
+            for (let k = lowerPoints.length - 1; k >= 0; k--) {
+                tunnelPath += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
+            }
+            tunnelPath += ' Z';
+        }
     }
 
     // --- SMART AXIS LOGIC ---
@@ -777,6 +809,16 @@ export default function App() {
           
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
+
+          {/* TUNNEL (SHADED AREA) */}
+          {tunnelPath && (
+              <path 
+                d={tunnelPath}
+                fill="#10b981"
+                opacity="0.1"
+                stroke="none"
+              />
+          )}
 
           {/* PROJECTION LINE (PATH) */}
           {projectionPath && (
