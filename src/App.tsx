@@ -685,8 +685,23 @@ export default function App() {
              {/* GRADIENT DEFINITION */}
              <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
                 {data.map((_, i) => {
-                   const offset = (i / denominator) * 100;
-                   return <stop key={i} offset={`${offset}%`} stopColor={getPointColor(i)} />;
+                   if (i === 0) return null;
+                   
+                   // Double-stop technique:
+                   // The color for segment i (from i-1 to i) applies from (i-1) to i.
+                   // We add a stop at the start (i-1) and end (i) with the same color.
+                   // This creates a solid block of color for that segment with sharp transitions at nodes.
+                   
+                   const prevOffset = ((i - 1) / denominator) * 100;
+                   const curOffset = (i / denominator) * 100;
+                   const color = getPointColor(i);
+
+                   return (
+                     <React.Fragment key={i}>
+                        <stop offset={`${prevOffset.toFixed(2)}%`} stopColor={color} />
+                        <stop offset={`${curOffset.toFixed(2)}%`} stopColor={color} />
+                     </React.Fragment>
+                   );
                 })}
              </linearGradient>
           </defs>
