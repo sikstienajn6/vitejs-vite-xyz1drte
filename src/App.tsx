@@ -371,9 +371,9 @@ export default function App() {
     if (weeklyData.length === 0 || !settings) return [];
 
     const now = new Date();
-    // Safety check: weeklyData is not empty (checked above), but element might be undefined in strict mode
-    const lastWeek = weeklyData[weeklyData.length - 1];
-    const latestLogged = lastWeek ? new Date(lastWeek.startDate) : now;
+    
+    // SAFE DATE ACCESS FIX
+    const latestLogged = new Date(weeklyData[weeklyData.length - 1]?.startDate || new Date());
     
     // Show chart up to whichever is later: Today or the projected future week
     const endChartDate = now > latestLogged ? now : latestLogged; 
@@ -404,10 +404,7 @@ export default function App() {
             const isReset = w.isReset && i > 0;
             
             if (isReset) {
-                // INJECT PHANTOM POINT:
-                // If Week 3 is a reset, it means it starts from Week 2's ACTUAL.
-                // We create a "Phantom" Week 2 point that sits at Week 2's date, 
-                // but starts the new segment (groupKey = w.weekId).
+                // INJECT PHANTOM POINT
                 const prev = visibleWeeks[i-1];
                 points.push({
                     label: prev.weekId,
@@ -454,8 +451,6 @@ export default function App() {
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
                 
                 // Calculate start of this week's tunnel segment.
-                // If reset: Start = PrevActual. If continuous: Start = PrevTarget.
-                // Since parentWeek.target is the END of the week target:
                 // Start = parentWeek.target - rate.
                 const weekStartTarget = parentWeek.target - rate;
                 
