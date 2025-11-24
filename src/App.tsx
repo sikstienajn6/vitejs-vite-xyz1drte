@@ -90,10 +90,16 @@ interface WeeklySummary {
 
 interface ChartPoint {
     label: string; 
+    dateObj: Date; // Added for easier date math in renderer
     actual: number | null; 
     trend: number | null;  
-    target: number;
     weekLabel?: string;
+}
+
+interface ProjectionData {
+  anchorDate: Date;
+  anchorVal: number;
+  dailySlope: number;
 }
 
 // --- Helper Functions ---
@@ -121,17 +127,11 @@ const getDaysArray = (start: Date, end: Date) => {
 };
 
 // RGB Interpolation Helper
-// FIX: Removed unused 'tolerance' parameter
 const interpolateColor = (diff: number) => {
-    // Colors (R, G, B)
     const cGreen = [16, 185, 129]; // Emerald 500
     const cOrange = [251, 191, 36]; // Amber 400
     const cRed = [239, 68, 68];     // Red 500
 
-    // Scaling factor (how strict the gradient is)
-    // Map 0 -> 0.1 diff to Green->Orange
-    // Map 0.1 -> 0.25 diff to Orange->Red
-    
     let color1, color2, t;
 
     if (diff <= 0.15) {
@@ -349,14 +349,48 @@ export default function App() {
   }, [weights, settings]);
 
 
+  // --- PROJECTION DATA (The "Green Line" logic) ---
+  const projectionData = useMemo<ProjectionData | null>(() => {
+    if (!settings || weights.length === 0) return null;
+    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+    const dailySlope = rate / 7;
+
+    if (chartMode === 'daily') {
+        // Daily: Anchor is the "Next to Last" entered weight's trend value
+        // Weights are sorted descending (0 is latest, 1 is next to last)
+        const anchorIndex = weights.length > 1 ? 1 : 0;
+        const anchorEntry = weights[anchorIndex];
+        const anchorVal = trendMap.get(anchorEntry.date) ?? anchorEntry.weight;
+        
+        return {
+            anchorDate: new Date(anchorEntry.date),
+            anchorVal: anchorVal,
+            dailySlope: dailySlope
+        };
+    } else {
+        // Weekly: Anchor is the "Next to Last" week's trend
+        const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
+        // weeklyData is sorted Ascending in the calculation block, so last is current, last-1 is prev
+        const anchorWeek = weeklyData[anchorIndex];
+        
+        // We use the start date of that week for math
+        const anchorDate = new Date(anchorWeek.entries[0].date); 
+        
+        return {
+            anchorDate: anchorDate,
+            anchorVal: anchorWeek.actual,
+            dailySlope: dailySlope // We still use linear projection
+        };
+    }
+  }, [weights, weeklyData, chartMode, settings, trendMap]);
+
+
   // --- CHART DATA PREP ---
   const finalChartData = useMemo<ChartPoint[]>(() => {
     if (weeklyData.length === 0 || !settings) return [];
 
     const now = new Date();
-    // weights[0] is the LATEST date because of orderBy('date', 'desc')
     const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
-    
     const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
 
     let startDate = new Date('2000-01-01'); 
@@ -379,23 +413,19 @@ export default function App() {
             .filter(w => new Date(w.entries[0].date) >= startDate)
             .map(w => ({
                 label: w.weekId, 
+                dateObj: new Date(w.entries[0].date),
                 weekLabel: w.weekLabel,
                 actual: w.rawAvg, 
                 trend: w.actual, 
-                target: w.target
             }));
     } else {
-            const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-            const dailyRate = rate / 7;
             const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-            
             const allDays = getDaysArray(startDate, chartEndDate);
             
             let lastKnownTrend = 0;
             const startStr = startDate.toISOString().split('T')[0];
             const sortedDates = Array.from(trendMap.keys()).sort();
             
-            // Seed trend
             for (let i = sortedDates.length - 1; i >= 0; i--) {
                 if (sortedDates[i] <= startStr) {
                     lastKnownTrend = trendMap.get(sortedDates[i]) || 0;
@@ -404,30 +434,17 @@ export default function App() {
             }
             if (lastKnownTrend === 0 && sortedDates.length > 0) lastKnownTrend = trendMap.get(sortedDates[0]) || 0;
 
-            let prevDayTrend = lastKnownTrend;
-
-            // FIX: Removed unused 'index' parameter from callback
             return allDays.map((dateStr) => {
-              // Update trend if we have a real data point this day
               if (trendMap.has(dateStr)) {
                   lastKnownTrend = trendMap.get(dateStr)!;
               }
               
-              // Target Logic: Target for today is Yesterday's Trend + Daily Rate
-              // This ensures the tunnel intersects yesterday's EMA point
-              const target = prevDayTrend + dailyRate;
-              
-              const point = {
+              return {
                 label: dateStr,
+                dateObj: new Date(dateStr),
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 trend: lastKnownTrend, 
-                target: target 
               };
-
-              // Update "prevDayTrend" for the next iteration
-              prevDayTrend = lastKnownTrend;
-
-              return point;
             }).filter(p => p.trend !== 0); 
     }
           
@@ -616,7 +633,7 @@ export default function App() {
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height, width, settings }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null }) => {
+  const ChartRenderer = ({ data, mode, height, width, settings, projection }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null }) => {
     if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log data to see trend</p>
@@ -629,12 +646,16 @@ export default function App() {
     // Padding
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
+    // --- SCALING CALCULATIONS ---
     const validValues = data.flatMap(d => {
         const vals = [];
         if (d.actual !== null) vals.push(d.actual);
         if (d.trend !== null) vals.push(d.trend);
         return vals;
     });
+    
+    // Need to account for projection line in Y-scale range if possible, 
+    // but usually better to let it clip if it goes way off chart to keep data focus.
     
     const rawMin = Math.min(...validValues);
     const rawMax = Math.max(...validValues);
@@ -670,16 +691,10 @@ export default function App() {
             
             // Calculate Slope for this segment
             const currentSlope = point.trend - prev.trend;
-            
-            // Calculate Target Slope
             const targetSlope = settings.weeklyRate; 
-            
-            // Deviation
             const diff = Math.abs(currentSlope - targetSlope);
             
-            // FIX: Removed 'RATE_TOLERANCE_GREEN' usage, using only diff
             const color = interpolateColor(diff);
-            
             const offset = (i / denominator) * 100;
             
             // For the very first valid segment, we need a starting stop at 0 or the previous point's offset
@@ -693,6 +708,7 @@ export default function App() {
         return stopList;
     }, [data, settings, mode, denominator]);
 
+    // --- TREND LINE PATH ---
     let trendPath = '';
     if (count > 1) {
         let lastValidT = -1;
@@ -704,6 +720,40 @@ export default function App() {
             else trendPath += `L ${x},${y} `; 
             lastValidT = i;
         });
+    }
+
+    // --- SINGLE CONTINUOUS PROJECTION LINE ---
+    let projectionLine = null;
+    if (projection && data.length > 1) {
+        const msPerDay = 86400000;
+        
+        // Calculate Y for First visible point
+        const firstPoint = data[0];
+        const diffDaysStart = (firstPoint.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+        const valStart = projection.anchorVal + (diffDaysStart * projection.dailySlope);
+        
+        // Calculate Y for Last visible point
+        const lastPoint = data[data.length - 1];
+        const diffDaysEnd = (lastPoint.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+        const valEnd = projection.anchorVal + (diffDaysEnd * projection.dailySlope);
+        
+        const x1 = getX(0);
+        const y1 = getY(valStart);
+        const x2 = getX(data.length - 1);
+        const y2 = getY(valEnd);
+        
+        projectionLine = (
+            <line 
+                x1={x1} 
+                y1={y1} 
+                x2={x2} 
+                y2={y2} 
+                stroke="#10b981" 
+                strokeWidth="1.5"
+                strokeDasharray="4 4" 
+                opacity="0.8"
+            />
+        );
     }
 
     // --- SMART AXIS LOGIC ---
@@ -737,35 +787,8 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TARGET TUNNEL LINES */}
-          {/* This creates disjointed segments starting from PREV actual trend to CURRENT target */}
-          {count > 1 && data.map((d, i) => {
-              if (i === 0) return null;
-              const prev = data[i-1];
-              if (prev.trend === null) return null;
-
-              // Line Start: Previous Time, Previous Trend
-              const x1 = getX(i-1);
-              const y1 = getY(prev.trend);
-              
-              // Line End: Current Time, Target (which is PrevTrend + Rate)
-              const x2 = getX(i);
-              const y2 = getY(d.target);
-
-              return (
-                  <line 
-                    key={`target-${i}`}
-                    x1={x1} 
-                    y1={y1} 
-                    x2={x2} 
-                    y2={y2} 
-                    stroke="#10b981" // Green
-                    strokeWidth="1.5"
-                    strokeDasharray="3 3" // Dotted
-                    opacity="0.6"
-                  />
-              );
-          })}
+          {/* PROJECTION LINE */}
+          {projectionLine}
 
           {/* TREND LINE */}
           {count > 1 && (
@@ -942,7 +965,7 @@ export default function App() {
                         </div>
                     </div>
 
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} />
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} />
                     
                     <div 
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
