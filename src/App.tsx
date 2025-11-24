@@ -95,8 +95,6 @@ interface ChartPoint {
     actual: number | null; 
     trend: number | null;  
     target: number;
-    targetUpper: number;
-    targetLower: number;
     weekLabel?: string;
 }
 
@@ -259,67 +257,45 @@ export default function App() {
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
-let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
-  const entries = groups[weekKey];
-  const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
-  const rawAvg = valSum / entries.length;
+    let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
+      const entries = groups[weekKey];
+      const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
+      const rawAvg = valSum / entries.length;
 
-  // Use EMA average (trend) for the week's "actual"
-  const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) ?? e.weight), 0);
-  const trendAvg = trendSum / entries.length;
+      // Use EMA average (trend) for the week's "actual"
+      const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) ?? e.weight), 0);
+      const trendAvg = trendSum / entries.length;
 
-  const earliestDate = entries[0].date; // earliest is now entries[0] because we sorted
+      const earliestDate = entries[0].date; 
 
-  return {
-    weekId: weekKey,
-    weekLabel: formatDate(earliestDate),
-    actual: trendAvg,
-    rawAvg: rawAvg,
-    count: entries.length,
-    entries: entries,
-    target: 0,
-    delta: 0,
-    hasPrev: false,
-    inTunnel: true
-  } as WeeklySummary;
-});
+      return {
+        weekId: weekKey,
+        weekLabel: formatDate(earliestDate),
+        actual: trendAvg,
+        rawAvg: rawAvg,
+        count: entries.length,
+        entries: entries,
+        target: 0,
+        delta: 0,
+        hasPrev: false,
+        inTunnel: true
+      } as WeeklySummary;
+    });
 
-// Assign targets so each week is centred on previous week's EMA + rate
-for (let i = 0; i < processedWeeks.length; i++) {
-  if (i === 0) {
-    // first week: anchor target at its own EMA (no previous week available)
-    processedWeeks[i].target = processedWeeks[i].actual;
-    processedWeeks[i].hasPrev = false;
-    processedWeeks[i].delta = 0;
-  } else {
-    const prevWeek = processedWeeks[i - 1];
-    // Always start from previous week's EMA, then add desired weekly rate
-    processedWeeks[i].target = prevWeek.actual + rate;
-    processedWeeks[i].delta = processedWeeks[i].actual - prevWeek.actual;
-    processedWeeks[i].hasPrev = true;
-  }
-
-  processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
-}
-
-
+    // Assign targets so each week is centred on previous week's EMA + rate
     for (let i = 0; i < processedWeeks.length; i++) {
-        if (i === 0) {
-            processedWeeks[i].target = processedWeeks[i].actual;
-        } else {
-            const prev = processedWeeks[i-1];
-            const dist = Math.abs(prev.actual - prev.target);
-            
-            if (dist <= TARGET_TOLERANCE) {
-                processedWeeks[i].target = prev.target + rate;
-            } else {
-                processedWeeks[i].target = prev.actual + rate;
-            }
-            
-            processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
-            processedWeeks[i].hasPrev = true;
-        }
-        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+      if (i === 0) {
+        processedWeeks[i].target = processedWeeks[i].actual;
+        processedWeeks[i].hasPrev = false;
+        processedWeeks[i].delta = 0;
+      } else {
+        const prevWeek = processedWeeks[i - 1];
+        processedWeeks[i].target = prevWeek.actual + rate;
+        processedWeeks[i].delta = processedWeeks[i].actual - prevWeek.actual;
+        processedWeeks[i].hasPrev = true;
+      }
+
+      processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
     }
 
     const lastEntry = sortedWeights[sortedWeights.length - 1];
@@ -372,9 +348,7 @@ for (let i = 0; i < processedWeeks.length; i++) {
                 weekLabel: w.weekLabel,
                 actual: w.rawAvg, 
                 trend: w.actual, 
-                target: w.target,
-                targetUpper: w.target + TARGET_TOLERANCE,
-                targetLower: w.target - TARGET_TOLERANCE,
+                target: w.target
             }));
           } else {
             const rate = parseFloat(settings.weeklyRate.toString()) || 0;
@@ -393,12 +367,11 @@ for (let i = 0; i < processedWeeks.length; i++) {
           
               if (parentWeek) {
                 const parentIdx = weekIndexMap.get(wKey)!;
-                const prevWeek = orderedWeeks[parentIdx - 1]; // may be undefined for first week
+                const prevWeek = orderedWeeks[parentIdx - 1]; 
           
-                // determine the start of growth for this week: previous week's EMA (if exists), otherwise use parentWeek.actual - rate
+                // determine the start of growth for this week
                 const startEMA = prevWeek ? prevWeek.actual : (parentWeek.actual - rate);
           
-                // dayIndex: 0..6 (Mon..Sun). Use a consistent progression across the 7 days
                 const dayNum = new Date(dateStr).getDay();
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1;
                 const dailyProgress = (dayIndex + 1) / 7;
@@ -411,9 +384,7 @@ for (let i = 0; i < processedWeeks.length; i++) {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
-                target: targetFound ? dailyTarget : 0,
-                targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
-                targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
+                target: targetFound ? dailyTarget : 0
               };
             }).filter(p => p.target !== 0);
           }
@@ -522,14 +493,6 @@ for (let i = 0; i < processedWeeks.length; i++) {
     // Convert to absolute target to compare magnitude
     const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
     
-    // We analyze the gap. 
-    // If GAINING: Target 0.2. 
-    //   If rate < 0.1 (Too slow/Stall) -> Add Cals
-    //   If rate > 0.35 (Too fast) -> Cut Cals
-    // If LOSING: Target -0.5. (We treat magnitude)
-    //   If rate > -0.2 (e.g. -0.1 or +0.1) -> Loss is too slow -> Cut Cals
-    //   If rate < -0.8 -> Loss is too fast -> Add Cals
-
     const rate = currentTrendRate;
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
@@ -540,9 +503,7 @@ for (let i = 0; i < processedWeeks.length; i++) {
     } else {
         // Lose logic (rates are negative)
         const targetSigned = -targetAbs;
-        // e.g. Target -0.5. Rate -0.1. (-0.1 > -0.4) -> Slow loss
         if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        // e.g. Target -0.5. Rate -0.8. (-0.8 < -0.65) -> Fast loss
         else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
     }
 
@@ -627,14 +588,13 @@ for (let i = 0; i < processedWeeks.length; i++) {
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
     
-    // Padding: Left maintained at 32 for Y-axis text
+    // Padding
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
         const vals = [];
         if (d.actual !== null) vals.push(d.actual);
         if (d.trend !== null) vals.push(d.trend);
-        vals.push(d.targetUpper, d.targetLower);
         return vals;
     });
     
@@ -658,12 +618,6 @@ for (let i = 0; i < processedWeeks.length; i++) {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    // --- AREA POINTS ---
-    const areaPoints = [
-        ...data.map((d, i) => `${getX(i)},${getY(d.targetUpper)}`),
-        ...data.slice().reverse().map((d, i) => `${getX(data.length - 1 - i)},${getY(d.targetLower)}`)
-    ].join(' ');
-
     let trendPath = '';
     if (count > 1) {
         let lastValidT = -1;
@@ -682,7 +636,6 @@ for (let i = 0; i < processedWeeks.length; i++) {
     }
 
     // --- SMART AXIS LOGIC ---
-    // Minimum pixels required between two X-axis labels
     const minLabelSpacing = 35; 
     let lastRenderedX = -999;
     const lastPointX = getX(data.length - 1);
@@ -705,23 +658,9 @@ for (let i = 0; i < processedWeeks.length; i++) {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TUNNEL */}
-          <polygon points={areaPoints} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
-          
-          {/* TREND LINE */}
-          <defs>
-            <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
-                {data.map((d, i) => {
-                    if (d.trend === null) return null;
-                    const offset = (i / denominator) * 100;
-                    const isOff = d.trend > d.targetUpper || d.trend < d.targetLower;
-                    return <stop key={i} offset={`${offset}%`} stopColor={isOff ? "#ef4444" : "#10b981"} />;
-                })}
-            </linearGradient>
-          </defs>
-          
+          {/* TREND LINE (Solid Emerald) */}
           {count > 1 && (
-              <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
+              <path d={trendPath} fill="none" stroke="#10b981" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
           )}
 
           {/* DATA POINTS */}
@@ -757,30 +696,24 @@ for (let i = 0; i < processedWeeks.length; i++) {
              let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
 
-             // 1. Always render First
              if (isFirst) {
                  shouldRender = true;
                  anchor = "start";
              }
-             // 2. Always render Last
              else if (isLast) {
                  shouldRender = true;
                  anchor = "end";
              }
-             // 3. Render intermediate if space permits (Buffer Zone Logic)
              else {
                  const distToLast = lastPointX - xPos;
                  const distToPrev = xPos - lastRenderedX;
                  
-                 // Must clear BOTH the Previous label AND the Final label
                  if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
                      shouldRender = true;
                  }
              }
 
              if (!shouldRender) return null;
-
-             // Update tracker only if we actually rendered
              lastRenderedX = xPos;
 
              return (
@@ -877,7 +810,6 @@ for (let i = 0; i < processedWeeks.length; i++) {
                                     <Info size={13} />
                                 </button>
                             </div>
-                            <p className="text-[10px] font-normal text-slate-500">Tunnel: ±{TARGET_TOLERANCE}kg</p>
                         </div>
                         
                         <div className="flex gap-1 shrink-0">
@@ -900,9 +832,8 @@ for (let i = 0; i < processedWeeks.length; i++) {
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
                         style={{ touchAction: 'none' }} 
                     >
-                        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400">
+                        <div className="grid grid-cols-2 gap-2 text-[10px] font-bold text-center text-slate-400 w-2/3 mx-auto">
                             <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>Tunnel</div>
                             <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
                         </div>
 
@@ -911,7 +842,7 @@ for (let i = 0; i < processedWeeks.length; i++) {
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
                                     <Info size={12} className="text-blue-500" /> EMA model
                                 </div>
-                                <p>Exponentialwda Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
+                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
                             </div>
                         )}
 
@@ -1046,13 +977,6 @@ for (let i = 0; i < processedWeeks.length; i++) {
                             className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
                             placeholder="0.87"
                         />
-                    </div>
-
-                    <div className="text-xs text-slate-400 flex items-start gap-2 bg-slate-950/30 p-3 rounded-lg border border-slate-800/50">
-                        <AlertCircle size={14} className="shrink-0 mt-0.5 text-blue-400" />
-                        <p className="leading-relaxed">
-                            The chart tunnel is ±{TARGET_TOLERANCE}kg tolerance from your smoothed Trend Weight.
-                        </p>
                     </div>
 
                     <div className="pt-4 mt-auto">
