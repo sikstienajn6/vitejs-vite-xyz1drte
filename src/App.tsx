@@ -346,7 +346,7 @@ export default function App() {
         // independent of the previous week's position.
         return weeklyData
             .filter(w => new Date(w.entries[0].date) >= startDate)
-            .flatMap((w, i, arr) => {
+            .flatMap((w) => {
                 // Determine where this week's tunnel SHOULD start
                 // If it's a reset week (no prev or deviated), it starts at its own base (actual weight)
                 // If it's continuous, it technically starts where the previous target ended.
@@ -439,19 +439,7 @@ export default function App() {
         });
         return points;
     }
-  }, [weeklyData, weights, chartMode, settings, filterRange,QPtrendMap]);
-
-  // --- ACTIONS ---
-  const resetSettingsForm = () => {
-     if (settings) {
-        const wRate = settings.weeklyRate || 0;
-        const isNegative = wRate < 0;
-        const absRate = Math.abs(wRate);
-        setGoalType(isNegative ? 'lose' : 'gain');
-        setWeeklyRate(absRate.toString());
-        setMonthlyRate((absRate * 4.345).toFixed(2));
-     }
-  };
+  }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
 
   const handleNavigation = (targetView: 'dashboard' | 'settings') => {
     if (view === 'settings' && targetView === 'dashboard') resetSettingsForm();
