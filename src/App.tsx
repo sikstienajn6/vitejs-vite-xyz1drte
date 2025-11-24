@@ -330,22 +330,7 @@ export default function App() {
       processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
     }
 
-    const lastEntry = sortedWeights[sortedWeights.length - 1];
-    const lastTrend = tMap.get(lastEntry.date) || 0;
-    
-    const sevenDaysAgo = new Date(lastEntry.date);
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const sdaString = sevenDaysAgo.toISOString().split('T')[0];
-    
-    let prevTrend = lastTrend; 
-    for(let i = sortedWeights.length - 2; i >= 0; i--) {
-        if (sortedWeights[i].date <= sdaString) {
-            prevTrend = tMap.get(sortedWeights[i].date) || 0;
-            break;
-        }
-    }
-    
-    const currentRate = lastTrend - prevTrend;
+    const currentRate = processedWeeks.length > 1 ? processedWeeks[processedWeeks.length - 1].delta : 0;
 
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
