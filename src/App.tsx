@@ -80,15 +80,16 @@ interface SettingsData {
 interface WeeklySummary {
   weekId: string;
   weekLabel: string;
-  actual: number; 
-  rawAvg: number; 
+  actual: number | null; 
+  rawAvg: number | null; 
   count: number;
   entries: WeightEntry[];
   target: number;
   delta: number;
   hasPrev: boolean;
   inTunnel: boolean; 
-  isReset: boolean; // New flag for visual discontinuity
+  isReset: boolean;
+  startDate: string; // Helper for layout
 }
 
 interface ChartPoint {
@@ -99,8 +100,8 @@ interface ChartPoint {
     targetUpper: number;
     targetLower: number;
     weekLabel?: string;
-    groupKey: string; // Used to group segments (e.g., weekId)
-    isGap?: boolean; // Used in Weekly mode to force a break
+    groupKey: string; 
+    isPhantom?: boolean; // For visual jumps
 }
 
 // --- Helper Functions ---
@@ -111,6 +112,16 @@ const getWeekKey = (date: string) => {
   const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
+};
+
+const getWeekDateFromKey = (weekKey: string) => {
+    // Inverse of getWeekKey to find approx start date (Monday)
+    const [year, week] = weekKey.split('-W').map(Number);
+    const d = new Date(Date.UTC(year, 0, 1 + (week - 1) * 7));
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    d.setDate(diff);
+    return d.toISOString().split('T')[0];
 };
 
 const formatDate = (dateString: string) => {
@@ -239,6 +250,7 @@ export default function App() {
 
     const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
+    // 1. Calculate Daily Trend
     const tMap = new Map<string, number>();
     let currentTrend = sortedWeights[0].weight; 
 
@@ -247,6 +259,7 @@ export default function App() {
         tMap.set(entry.date, currentTrend);
     });
 
+    // 2. Group by Week
     const groups: Record<string, WeightEntry[]> = {};
     weights.forEach(entry => {
       const weekKey = getWeekKey(entry.date);
@@ -256,6 +269,7 @@ export default function App() {
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
+    // 3. Process Existing Weeks
     let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
@@ -264,10 +278,13 @@ export default function App() {
       const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
       const trendAvg = trendSum / entries.length;
 
-      const earliestDate = entries[entries.length - 1].date; 
+      // Find earliest date in this week group for sorting/labeling
+      const dates = entries.map(e => e.date).sort();
+      const earliestDate = dates[0]; 
 
       return {
         weekId: weekKey,
+        startDate: earliestDate, // Actual data start
         weekLabel: formatDate(earliestDate),
         actual: trendAvg, 
         rawAvg: rawAvg,
@@ -281,33 +298,68 @@ export default function App() {
       };
     });
 
+    // 4. Project FUTURE Week (If current time is ahead of last data)
+    // This fixes the "No tunnel for 3rd week" issue
+    if (processedWeeks.length > 0) {
+        const lastWeek = processedWeeks[processedWeeks.length - 1];
+        const lastDate = new Date(lastWeek.startDate);
+        const nextWeekDate = new Date(lastDate);
+        nextWeekDate.setDate(nextWeekDate.getDate() + 7);
+        const nextWeekKey = getWeekKey(nextWeekDate.toISOString());
+
+        if (nextWeekKey !== lastWeek.weekId) {
+             processedWeeks.push({
+                weekId: nextWeekKey,
+                startDate: nextWeekDate.toISOString().split('T')[0],
+                weekLabel: formatDate(nextWeekDate.toISOString()),
+                actual: null, // No data yet
+                rawAvg: null,
+                count: 0,
+                entries: [],
+                target: 0,
+                delta: 0,
+                hasPrev: true,
+                inTunnel: true,
+                isReset: false
+             });
+        }
+    }
+
+    // 5. Calculate Targets & Tunnel Logic
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
-            processedWeeks[i].target = processedWeeks[i].actual;
+            processedWeeks[i].target = processedWeeks[i].actual || 0;
         } else {
             const prev = processedWeeks[i-1];
-            const dist = Math.abs(prev.actual - prev.target);
+            
+            // If previous week has no data (gap in logging), use its target as proxy
+            const prevVal = prev.actual !== null ? prev.actual : prev.target;
+            
+            const dist = Math.abs(prevVal - prev.target);
             
             if (dist <= TARGET_TOLERANCE) {
-                // Keep Tunnel
+                // Keep Tunnel: Continue from PREVIOUS TARGET
                 processedWeeks[i].target = prev.target + rate;
                 processedWeeks[i].isReset = false;
             } else {
-                // Reset Tunnel
-                processedWeeks[i].target = prev.actual + rate;
+                // Reset Tunnel: Start new from PREVIOUS ACTUAL
+                processedWeeks[i].target = prevVal + rate;
                 processedWeeks[i].isReset = true;
             }
             
-            processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
+            processedWeeks[i].delta = (processedWeeks[i].actual || 0) - prevVal;
             processedWeeks[i].hasPrev = true;
         }
-        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+        
+        if (processedWeeks[i].actual !== null) {
+            processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+        }
     }
 
+    // Rate Calculation for UI
     const lastEntry = sortedWeights[sortedWeights.length - 1];
-    const lastTrend = tMap.get(lastEntry.date) || 0;
-    
-    const sevenDaysAgo = new Date(lastEntry.date);
+    const lastTrend = lastEntry ? (tMap.get(lastEntry.date) || 0) : 0;
+    const sevenDaysAgo = lastEntry ? new Date(lastEntry.date) : new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const sdaString = sevenDaysAgo.toISOString().split('T')[0];
     
@@ -318,7 +370,6 @@ export default function App() {
             break;
         }
     }
-    
     const currentRate = lastTrend - prevTrend;
 
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
@@ -330,6 +381,10 @@ export default function App() {
     if (weeklyData.length === 0 || !settings) return [];
 
     const now = new Date();
+    const latestLogged = new Date(weeklyData[weeklyData.length - 1].startDate);
+    // Show chart up to whichever is later: Today or the projected future week
+    const endChartDate = now > latestLogged ? now : latestLogged; 
+
     let startDate = new Date('2000-01-01'); 
     const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
 
@@ -344,12 +399,37 @@ export default function App() {
     }
 
     if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
-    if (startDate > now) startDate = earliestDataDate;
+    
+    // Ensure we see at least into the projected week
+    if (startDate > latestLogged) startDate = earliestDataDate;
 
     if (chartMode === 'weekly') {
-        return weeklyData
-            .filter(w => new Date(w.entries[0].date) >= startDate)
-            .map(w => ({
+        const points: ChartPoint[] = [];
+        const visibleWeeks = weeklyData.filter(w => new Date(w.startDate) >= startDate);
+
+        visibleWeeks.forEach((w, i) => {
+            const isReset = w.isReset && i > 0;
+            
+            if (isReset) {
+                // INJECT PHANTOM POINT:
+                // If Week 3 is a reset, it means it starts from Week 2's ACTUAL.
+                // We create a "Phantom" Week 2 point that sits at Week 2's date, 
+                // but starts the new segment (groupKey = w.weekId).
+                const prev = visibleWeeks[i-1];
+                points.push({
+                    label: prev.weekId,
+                    weekLabel: prev.weekLabel,
+                    actual: null, // Don't draw dot
+                    trend: null,
+                    target: (prev.actual !== null ? prev.actual : prev.target), // Start height of new tunnel
+                    targetUpper: (prev.actual !== null ? prev.actual : prev.target) + TARGET_TOLERANCE,
+                    targetLower: (prev.actual !== null ? prev.actual : prev.target) - TARGET_TOLERANCE,
+                    groupKey: w.weekId, // Belongs to NEW segment
+                    isPhantom: true
+                });
+            }
+
+            points.push({
                 label: w.weekId, 
                 weekLabel: w.weekLabel,
                 actual: w.rawAvg, 
@@ -357,14 +437,17 @@ export default function App() {
                 target: w.target,
                 targetUpper: w.target + TARGET_TOLERANCE,
                 targetLower: w.target - TARGET_TOLERANCE,
-                groupKey: 'weekly-main',
-                isGap: w.isReset // Pass reset flag to create gap
-            }));
+                groupKey: isReset ? w.weekId : (i === 0 ? w.weekId : points[points.length-1].groupKey), 
+                isPhantom: false
+            });
+        });
+        return points;
     } else {
+        // DAILY MODE
         const rate = parseFloat(settings.weeklyRate.toString()) || 0;
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-        const allDays = getDaysArray(startDate, now);
+        const allDays = getDaysArray(startDate, endChartDate);
 
         return allDays.map(dateStr => {
             const wKey = getWeekKey(dateStr);
@@ -376,8 +459,13 @@ export default function App() {
             if (parentWeek) {
                 const dayNum = new Date(dateStr).getDay(); 
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
-                // Calculate week start target backwards from the End-of-Week target
+                
+                // Calculate start of this week's tunnel segment.
+                // If reset: Start = PrevActual. If continuous: Start = PrevTarget.
+                // Since parentWeek.target is the END of the week target:
+                // Start = parentWeek.target - rate.
                 const weekStartTarget = parentWeek.target - rate;
+                
                 const dailyProgress = (dayIndex + 1) / 7;
                 dailyTarget = weekStartTarget + (rate * dailyProgress);
                 targetFound = true;
@@ -390,7 +478,8 @@ export default function App() {
                 target: targetFound ? dailyTarget : 0,
                 targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
                 targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
-                groupKey: wKey // Group by Week ID to create separate polygons
+                groupKey: wKey, 
+                isPhantom: false
             };
         }).filter(p => p.target !== 0); 
     }
@@ -590,8 +679,6 @@ export default function App() {
     
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
-    
-    // Padding
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     const validValues = data.flatMap(d => {
@@ -623,19 +710,14 @@ export default function App() {
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
     // --- AREA POLYGONS (TUNNEL) ---
-    // We group points to create discontinuous polygons
     const tunnelPolygons: string[] = [];
-    
     let currentPolyPoints: number[] = [];
-    let lastGroupKey = '';
+    let lastGroupKey = data[0].groupKey;
 
     data.forEach((d, i) => {
-        const shouldBreak = 
-            (mode === 'daily' && d.groupKey !== lastGroupKey && lastGroupKey !== '') ||
-            (mode === 'weekly' && d.isGap);
-        
-        if (shouldBreak) {
-             // Close previous polygon
+        // Break polygon if Group changes. 
+        // In Weekly mode, Phantom points have same GroupKey as their 'next' real point, so they join correctly.
+        if (d.groupKey !== lastGroupKey) {
              if (currentPolyPoints.length > 0) {
                  const indices = currentPolyPoints;
                  const polyString = [
@@ -646,12 +728,10 @@ export default function App() {
                  currentPolyPoints = [];
              }
         }
-
         currentPolyPoints.push(i);
         lastGroupKey = d.groupKey;
     });
 
-    // Flush last polygon
     if (currentPolyPoints.length > 0) {
          const indices = currentPolyPoints;
          const polyString = [
@@ -661,13 +741,12 @@ export default function App() {
          tunnelPolygons.push(polyString);
     }
 
-
     // --- TREND LINE ---
     let trendPath = '';
     if (count > 1) {
         let lastValidT = -1;
         data.forEach((d, i) => {
-            if (d.trend === null) return;
+            if (d.trend === null || d.isPhantom) return; // Skip phantom points for trend line
             const x = getX(i);
             const y = getY(d.trend);
             if (lastValidT === -1) trendPath += `M ${x},${y} `;
@@ -692,7 +771,6 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
-          {/* HORIZONTAL GRID */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
@@ -703,12 +781,10 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TUNNEL POLYGONS (Multiple Segments) */}
           {tunnelPolygons.map((poly, idx) => (
               <polygon key={idx} points={poly} fill="rgba(16, 185, 129, 0.08)" stroke="none" />
           ))}
           
-          {/* TREND LINE */}
           <defs>
             <linearGradient id="trendGradient" gradientUnits="userSpaceOnUse">
                 {data.map((d, i) => {
@@ -724,9 +800,8 @@ export default function App() {
               <path d={trendPath} fill="none" stroke="url(#trendGradient)" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
           )}
 
-          {/* DATA POINTS */}
           {data.map((d, i) => {
-             if (d.actual === null) return null;
+             if (d.actual === null || d.isPhantom) return null;
              const px = getX(i);
              const py = getY(d.actual);
              
@@ -748,8 +823,10 @@ export default function App() {
              );
           })}
 
-          {/* X-AXIS LABELS */}
           {data.map((d, i) => {
+             // Don't label phantom points
+             if (d.isPhantom) return null;
+
              const xPos = getX(i);
              const isFirst = i === 0;
              const isLast = i === data.length - 1;
@@ -832,7 +909,9 @@ export default function App() {
                     <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
                         <p className="text-slate-400 text-xs font-medium uppercase mb-1">Trend Weight</p>
                         <p className="text-2xl font-bold text-white truncate">
-                        {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
+                        {weeklyData.length > 0 && weeklyData.filter(w=>w.actual !== null).length > 0
+                            ? weeklyData.filter(w=>w.actual !== null).pop()?.actual?.toFixed(1) 
+                            : '--'} 
                         <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
                         </p>
                     </div>
@@ -943,6 +1022,9 @@ export default function App() {
                         </div>
                         <div className="divide-y divide-slate-800">
                         {weeklyData.slice().reverse().map((item) => {
+                            // Don't show the future placeholder in the history list, only real data
+                            if (item.actual === null) return null;
+
                             const isExpanded = expandedWeeks.includes(item.weekId);
                             const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
                             return (
@@ -952,7 +1034,7 @@ export default function App() {
                                     <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
                                     <span className="text-[10px] text-slate-500">{item.count} entries</span>
                                 </div>
-                                <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
+                                <div className="text-right font-bold text-slate-200">{item.actual !== null ? item.actual.toFixed(1) : '-'}</div>
                                 <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
                                     {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
                                 </div>
