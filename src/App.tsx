@@ -93,8 +93,6 @@ interface ChartPoint {
     actual: number | null; 
     trend: number | null;  
     target: number;
-    tunnelHigh: number; // Upper bound of green tunnel
-    tunnelLow: number;  // Lower bound of green tunnel
     weekLabel?: string;
 }
 
@@ -120,6 +118,38 @@ const getDaysArray = (start: Date, end: Date) => {
         arr.push(new Date(dt).toISOString().split('T')[0]);
     }
     return arr;
+};
+
+// RGB Interpolation Helper
+const interpolateColor = (diff: number, tolerance: number) => {
+    // Colors (R, G, B)
+    const cGreen = [16, 185, 129]; // Emerald 500
+    const cOrange = [251, 191, 36]; // Amber 400
+    const cRed = [239, 68, 68];     // Red 500
+
+    // Scaling factor (how strict the gradient is)
+    // Map 0 -> 0.1 diff to Green->Orange
+    // Map 0.1 -> 0.25 diff to Orange->Red
+    
+    let color1, color2, t;
+
+    if (diff <= 0.15) {
+        // Green to Orange
+        color1 = cGreen;
+        color2 = cOrange;
+        t = diff / 0.15;
+    } else {
+        // Orange to Red
+        color1 = cOrange;
+        color2 = cRed;
+        t = Math.min(1, (diff - 0.15) / 0.15);
+    }
+
+    const r = Math.round(color1[0] + (color2[0] - color1[0]) * t);
+    const g = Math.round(color1[1] + (color2[1] - color1[1]) * t);
+    const b = Math.round(color1[2] + (color2[2] - color1[2]) * t);
+
+    return `rgb(${r}, ${g}, ${b})`;
 };
 
 // --- Main Component ---
@@ -249,10 +279,10 @@ export default function App() {
       groups[weekKey].push(entry);
     });
     
-    // Sort entries inside each week ascending by date
     Object.keys(groups).forEach(k => {
       groups[k].sort((a, b) => a.date.localeCompare(b.date));
     });
+    
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
@@ -261,7 +291,7 @@ export default function App() {
       const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
       const rawAvg = valSum / entries.length;
 
-      // Use EMA average for the week's "actual"
+      // Use EMA average (trend) for the week's "actual"
       const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) ?? e.weight), 0);
       const trendAvg = trendSum / entries.length;
 
@@ -300,7 +330,6 @@ export default function App() {
     const lastEntry = sortedWeights[sortedWeights.length - 1];
     const lastTrend = tMap.get(lastEntry.date) || 0;
     
-    // Calculate rate (change over last 7 days from trends)
     const sevenDaysAgo = new Date(lastEntry.date);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
     const sdaString = sevenDaysAgo.toISOString().split('T')[0];
@@ -324,7 +353,9 @@ export default function App() {
     if (weeklyData.length === 0 || !settings) return [];
 
     const now = new Date();
+    // weights[0] is the LATEST date because of orderBy('date', 'desc')
     const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
+    
     const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
 
     let startDate = new Date('2000-01-01'); 
@@ -350,22 +381,20 @@ export default function App() {
                 weekLabel: w.weekLabel,
                 actual: w.rawAvg, 
                 trend: w.actual, 
-                target: w.target,
-                tunnelHigh: w.target + TARGET_TOLERANCE,
-                tunnelLow: w.target - TARGET_TOLERANCE
+                target: w.target
             }));
     } else {
             const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-            const orderedWeeks = weeklyData.slice().sort((a,b) => a.weekId.localeCompare(b.weekId));
-            const weekIndexMap = new Map(orderedWeeks.map((w, idx) => [w.weekId, idx]));
+            const dailyRate = rate / 7;
             const weightMap = new Map(weights.map(w => [w.date, w.weight]));
             
             const allDays = getDaysArray(startDate, chartEndDate);
             
             let lastKnownTrend = 0;
-            // Find seed trend
             const startStr = startDate.toISOString().split('T')[0];
             const sortedDates = Array.from(trendMap.keys()).sort();
+            
+            // Seed trend
             for (let i = sortedDates.length - 1; i >= 0; i--) {
                 if (sortedDates[i] <= startStr) {
                     lastKnownTrend = trendMap.get(sortedDates[i]) || 0;
@@ -374,43 +403,30 @@ export default function App() {
             }
             if (lastKnownTrend === 0 && sortedDates.length > 0) lastKnownTrend = trendMap.get(sortedDates[0]) || 0;
 
-            return allDays.map(dateStr => {
-              const wKey = getWeekKey(dateStr);
-              const parentWeek = orderedWeeks[weekIndexMap.get(wKey) ?? -1];
-          
-              let dailyTarget = 0;
-              let targetFound = false;
-              
+            let prevDayTrend = lastKnownTrend;
+
+            return allDays.map((dateStr, index) => {
+              // Update trend if we have a real data point this day
               if (trendMap.has(dateStr)) {
                   lastKnownTrend = trendMap.get(dateStr)!;
               }
-          
-              if (parentWeek) {
-                const parentIdx = weekIndexMap.get(wKey)!;
-                const prevWeek = orderedWeeks[parentIdx - 1]; 
-          
-                // The baseline for the tunnel is the PREVIOUS week's actual EMA.
-                // If there is no previous week, we use current actual - rate (simulation)
-                const startEMA = prevWeek ? prevWeek.actual : (parentWeek.actual - rate);
-          
-                const dayNum = new Date(dateStr).getDay();
-                // If ISO week starts Monday:
-                const dayIndex = dayNum === 0 ? 6 : dayNum - 1;
-                const dailyProgress = (dayIndex + 1) / 7;
-          
-                dailyTarget = startEMA + (rate * dailyProgress);
-                targetFound = true;
-              }
-          
-              return {
+              
+              // Target Logic: Target for today is Yesterday's Trend + Daily Rate
+              // This ensures the tunnel intersects yesterday's EMA point
+              const target = prevDayTrend + dailyRate;
+              
+              const point = {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
                 trend: lastKnownTrend, 
-                target: targetFound ? dailyTarget : 0,
-                tunnelHigh: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
-                tunnelLow: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
+                target: target 
               };
-            }).filter(p => p.trend !== 0 && p.target !== 0); 
+
+              // Update "prevDayTrend" for the next iteration
+              prevDayTrend = lastKnownTrend;
+
+              return point;
+            }).filter(p => p.trend !== 0); 
     }
           
   }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
@@ -418,12 +434,12 @@ export default function App() {
   // --- ACTIONS ---
   const resetSettingsForm = () => {
      if (settings) {
-        const wRate = settings.weeklyRate || 0;
-        const isNegative = wRate < 0;
-        const absRate = Math.abs(wRate);
-        setGoalType(isNegative ? 'lose' : 'gain');
-        setWeeklyRate(absRate.toString());
-        setMonthlyRate((absRate * 4.345).toFixed(2));
+       const wRate = settings.weeklyRate || 0;
+       const isNegative = wRate < 0;
+       const absRate = Math.abs(wRate);
+       setGoalType(isNegative ? 'lose' : 'gain');
+       setWeeklyRate(absRate.toString());
+       setMonthlyRate((absRate * 4.345).toFixed(2));
      }
   };
 
@@ -615,8 +631,6 @@ export default function App() {
         const vals = [];
         if (d.actual !== null) vals.push(d.actual);
         if (d.trend !== null) vals.push(d.trend);
-        if (d.tunnelHigh !== null) vals.push(d.tunnelHigh);
-        if (d.tunnelLow !== null) vals.push(d.tunnelLow);
         return vals;
     });
     
@@ -640,65 +654,46 @@ export default function App() {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    // --- SLOPE COLOR CALCULATOR ---
-    const getSlopeColor = (curr: number, prev: number) => {
-        if (!settings) return '#10b981';
-        const slope = curr - prev;
-        const divisor = mode === 'weekly' ? 1 : 7;
-        const targetSlope = settings.weeklyRate / divisor;
-        const diff = Math.abs(slope - targetSlope);
-        
-        const tGreen = RATE_TOLERANCE_GREEN / divisor; 
-        const tOrange = RATE_TOLERANCE_ORANGE / divisor; 
-        
-        if (diff <= tGreen) return '#10b981'; // Emerald
-        if (diff <= tOrange) return '#fbbf24'; // Amber
-        return '#ef4444'; // Red
-    };
-
-    // --- GRADIENT STOPS ---
+    // --- GRADIENT LOGIC (Smooth RGB Interpolation) ---
     const stops = useMemo(() => {
-        if (data.length < 2) return [];
+        if (data.length < 2 || mode === 'daily') return [];
+        if (!settings) return [];
+        
         const stopList: React.ReactElement[] = [];
-        const fadePercent = (100 / denominator) * 0.15; 
 
         data.forEach((point, i) => {
+            if (point.trend === null || i === 0) return;
+            const prev = data[i-1];
+            if (prev.trend === null) return;
+            
+            // Calculate Slope for this segment
+            const currentSlope = point.trend - prev.trend;
+            
+            // Calculate Target Slope
+            const targetSlope = settings.weeklyRate; 
+            
+            // Deviation
+            const diff = Math.abs(currentSlope - targetSlope);
+            
+            // Get Gradual Color
+            const color = interpolateColor(diff, RATE_TOLERANCE_GREEN);
+            
             const offset = (i / denominator) * 100;
-            // Incoming 
-            let colorIn = '#10b981';
-            if (i > 0 && point.trend !== null && data[i-1].trend !== null) {
-                colorIn = getSlopeColor(point.trend, data[i-1].trend!);
-            }
-            // Outgoing
-            let colorOut = '#10b981';
-            if (i < denominator && data[i+1].trend !== null && point.trend !== null) {
-                colorOut = getSlopeColor(data[i+1].trend!, point.trend);
+            
+            // For the very first valid segment, we need a starting stop at 0 or the previous point's offset
+            if (stopList.length === 0) {
+                 stopList.push(<stop key={`start-${i}`} offset={`${((i-1)/denominator)*100}%`} stopColor={color} />);
             }
 
-            if (i === 0) {
-                stopList.push(<stop key={`${i}-start`} offset="0%" stopColor={colorOut} />);
-                stopList.push(<stop key={`${i}-clamp`} offset={`${fadePercent}%`} stopColor={colorOut} />);
-            } else if (i === denominator) {
-                stopList.push(<stop key={`${i}-clamp`} offset={`${100 - fadePercent}%`} stopColor={colorIn} />);
-                stopList.push(<stop key={`${i}-end`} offset="100%" stopColor={colorIn} />);
-            } else {
-                const startFade = Math.max(0, offset - fadePercent);
-                const endFade = Math.min(100, offset + fadePercent);
-                stopList.push(<stop key={`${i}-in`} offset={`${startFade}%`} stopColor={colorIn} />);
-                stopList.push(<stop key={`${i}-out`} offset={`${endFade}%`} stopColor={colorOut} />);
-            }
+            stopList.push(<stop key={i} offset={`${offset}%`} stopColor={color} />);
         });
+        
         return stopList;
     }, [data, settings, mode, denominator]);
 
     let trendPath = '';
-    // --- TUNNEL POLYGON LOGIC ---
-    let tunnelPath = '';
-    
     if (count > 1) {
         let lastValidT = -1;
-        
-        // Build Trend Line
         data.forEach((d, i) => {
             if (d.trend === null) return;
             const x = getX(i);
@@ -707,19 +702,6 @@ export default function App() {
             else trendPath += `L ${x},${y} `; 
             lastValidT = i;
         });
-
-        // Build Tunnel Polygon
-        // Top line: Left to Right
-        data.forEach((d, i) => {
-           if (i === 0) tunnelPath += `M ${getX(i)},${getY(d.tunnelHigh)} `;
-           else tunnelPath += `L ${getX(i)},${getY(d.tunnelHigh)} `;
-        });
-        // Bottom line: Right to Left
-        for (let i = data.length - 1; i >= 0; i--) {
-            tunnelPath += `L ${getX(i)},${getY(data[i].tunnelLow)} `;
-        }
-        // Close shape
-        tunnelPath += 'Z';
     }
 
     // --- SMART AXIS LOGIC ---
@@ -735,9 +717,11 @@ export default function App() {
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
           <defs>
-             <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
-                {stops}
-             </linearGradient>
+             {mode === 'weekly' && stops.length > 0 && (
+                 <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
+                    {stops}
+                 </linearGradient>
+             )}
           </defs>
 
           {/* HORIZONTAL GRID & Y-AXIS LABELS */}
@@ -751,22 +735,42 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* GREEN TUNNEL */}
-          {count > 1 && (
-             <path 
-                d={tunnelPath} 
-                fill="#10b981" 
-                fillOpacity="0.1" 
-                stroke="none"
-             />
-          )}
+          {/* TARGET TUNNEL LINES */}
+          {/* This creates disjointed segments starting from PREV actual trend to CURRENT target */}
+          {count > 1 && data.map((d, i) => {
+              if (i === 0) return null;
+              const prev = data[i-1];
+              if (prev.trend === null) return null;
 
-          {/* TREND LINE WITH GRADIENT */}
+              // Line Start: Previous Time, Previous Trend
+              const x1 = getX(i-1);
+              const y1 = getY(prev.trend);
+              
+              // Line End: Current Time, Target (which is PrevTrend + Rate)
+              const x2 = getX(i);
+              const y2 = getY(d.target);
+
+              return (
+                  <line 
+                    key={`target-${i}`}
+                    x1={x1} 
+                    y1={y1} 
+                    x2={x2} 
+                    y2={y2} 
+                    stroke="#10b981" // Green
+                    strokeWidth="1.5"
+                    strokeDasharray="3 3" // Dotted
+                    opacity="0.6"
+                  />
+              );
+          })}
+
+          {/* TREND LINE */}
           {count > 1 && (
              <path 
                 d={trendPath} 
                 fill="none" 
-                stroke="url(#trendGradient)" 
+                stroke={mode === 'weekly' ? "url(#trendGradient)" : "#94a3b8"} 
                 strokeWidth={expanded ? "3" : "2"} 
                 strokeLinecap="round" 
                 strokeLinejoin="round" 
@@ -785,7 +789,7 @@ export default function App() {
                         cx={px} 
                         cy={py} 
                         r={expanded ? 3.5 : 2} 
-                        fill="#94a3b8" 
+                        fill="#cbd5e1" 
                         opacity={expanded ? "0.9" : "0.6"}
                     />
                     {expanded && (
