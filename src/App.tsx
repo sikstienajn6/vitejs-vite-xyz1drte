@@ -325,6 +325,7 @@ export default function App() {
     let startDate = new Date('2000-01-01'); 
     const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
 
+    // Filter Logic
     if (filterRange === '1M') {
         startDate = new Date();
         startDate.setMonth(now.getMonth() - 1);
@@ -338,51 +339,107 @@ export default function App() {
     if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
     if (startDate > now) startDate = earliestDataDate;
 
+    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+
     if (chartMode === 'weekly') {
+        // STRATEGY: Generate 2 points per week (Start & End) to visualize the slope correctly
+        // independent of the previous week's position.
         return weeklyData
             .filter(w => new Date(w.entries[0].date) >= startDate)
-            .map(w => ({
-                label: w.weekId, 
-                weekLabel: w.weekLabel,
-                actual: w.rawAvg, 
-                trend: w.actual, 
-                target: w.target,
-                targetUpper: w.target + TARGET_TOLERANCE,
-                targetLower: w.target - TARGET_TOLERANCE,
-            }));
+            .flatMap((w, i, arr) => {
+                // Determine where this week's tunnel SHOULD start
+                // If it's a reset week (no prev or deviated), it starts at its own base (actual weight)
+                // If it's continuous, it technically starts where the previous target ended.
+                // Mathematically: TargetEnd = Anchor + Rate. Therefore Anchor = TargetEnd - Rate.
+                const startTarget = w.target - rate;
+                const endTarget = w.target;
+
+                const startPoint: ChartPoint = {
+                    label: '', // Empty label for the start point to avoid clutter
+                    weekLabel: '', 
+                    actual: null, // Don't show data point for start of week
+                    trend: null,
+                    target: startTarget,
+                    targetUpper: startTarget + TARGET_TOLERANCE,
+                    targetLower: startTarget - TARGET_TOLERANCE,
+                };
+
+                const endPoint: ChartPoint = {
+                    label: w.weekId, 
+                    weekLabel: w.weekLabel,
+                    actual: w.rawAvg, 
+                    trend: w.actual, 
+                    target: endTarget,
+                    targetUpper: endTarget + TARGET_TOLERANCE,
+                    targetLower: endTarget - TARGET_TOLERANCE,
+                };
+
+                // If this is a "Reset" week (deviation occurred), we ideally want a visual break 
+                // or a vertical drop. The flatMap naturally creates a "jump" from 
+                // Prev_End -> Curr_Start. 
+                return [startPoint, endPoint];
+            });
     } else {
-        const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+        // DAILY MODE
         const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
         const weightMap = new Map(weights.map(w => [w.date, w.weight]));
         const allDays = getDaysArray(startDate, now);
 
-        return allDays.map(dateStr => {
+        const points: ChartPoint[] = [];
+
+        allDays.forEach((dateStr, index) => {
             const wKey = getWeekKey(dateStr);
             const parentWeek = weekMap.get(wKey);
             
             let dailyTarget = 0;
             let targetFound = false;
 
+            // Detect if we just crossed a week boundary that required a reset
+            let isResetBoundary = false;
+            if (index > 0) {
+                const prevDate = allDays[index-1];
+                const prevWKey = getWeekKey(prevDate);
+                if (prevWKey !== wKey && parentWeek && !parentWeek.hasPrev) {
+                    isResetBoundary = true;
+                }
+            }
+
+            if (isResetBoundary) {
+                // Insert a "break" point to stop the line from sloping down diagonally
+                points.push({
+                    label: '',
+                    actual: null,
+                    trend: null,
+                    target: 0, // 0 target triggers the gap logic in many charts, or use null if supported
+                    targetUpper: 0,
+                    targetLower: 0,
+                });
+            }
+
             if (parentWeek) {
                 const dayNum = new Date(dateStr).getDay(); 
                 const dayIndex = dayNum === 0 ? 6 : dayNum - 1; 
+                // Calculate daily progress from the Start Anchor, not the previous week end
                 const weekStartTarget = parentWeek.target - rate;
                 const dailyProgress = (dayIndex + 1) / 7;
                 dailyTarget = weekStartTarget + (rate * dailyProgress);
                 targetFound = true;
             }
 
-            return {
-                label: dateStr,
-                actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
-                trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
-                target: targetFound ? dailyTarget : 0,
-                targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
-                targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
-            };
-        }).filter(p => p.target !== 0); 
+            if (targetFound) {
+                points.push({
+                    label: dateStr,
+                    actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
+                    trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
+                    target: dailyTarget,
+                    targetUpper: dailyTarget + TARGET_TOLERANCE,
+                    targetLower: dailyTarget - TARGET_TOLERANCE,
+                });
+            }
+        });
+        return points;
     }
-  }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
+  }, [weeklyData, weights, chartMode, settings, filterRange,QPtrendMap]);
 
   // --- ACTIONS ---
   const resetSettingsForm = () => {
