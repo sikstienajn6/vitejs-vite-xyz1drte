@@ -101,19 +101,13 @@ interface ChartPoint {
 }
 
 // --- Helper Functions ---
-const getWeekKey = (dateStr: string) => {
-  // Parse YYYY-MM-DD strictly as UTC to avoid timezone shifts
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  
-  // ISO Week Logic (Thursday determines the week)
-  const dayNum = date.getUTCDay() || 7;
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-  
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil((((date.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  
-  return `${date.getUTCFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
+const getWeekKey = (date: string) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
 };
 
 const formatDate = (dateString: string) => {
@@ -256,46 +250,71 @@ export default function App() {
       if (!groups[weekKey]) groups[weekKey] = [];
       groups[weekKey].push(entry);
     });
+    
+    // Sort entries inside each week ascending by date (oldest -> newest)
+    Object.keys(groups).forEach(k => {
+      groups[k].sort((a, b) => a.date.localeCompare(b.date));
+    });
+    
 
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     
-    let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
-      const entries = groups[weekKey];
-      const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
-      const rawAvg = valSum / entries.length;
-      
-      const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) || e.weight), 0);
-      const trendAvg = trendSum / entries.length;
+let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
+  const entries = groups[weekKey];
+  const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
+  const rawAvg = valSum / entries.length;
 
-      const earliestDate = entries[entries.length - 1].date; 
+  // Use EMA average (trend) for the week's "actual"
+  const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) ?? e.weight), 0);
+  const trendAvg = trendSum / entries.length;
 
-      return {
-        weekId: weekKey,
-        weekLabel: formatDate(earliestDate),
-        actual: trendAvg, 
-        rawAvg: rawAvg,
-        count: entries.length,
-        entries: entries,
-        target: 0, 
-        delta: 0,
-        hasPrev: false,
-        inTunnel: true 
-      };
-    });
+  const earliestDate = entries[0].date; // earliest is now entries[0] because we sorted
 
-    // --- FIX APPLIED HERE ---
+  return {
+    weekId: weekKey,
+    weekLabel: formatDate(earliestDate),
+    actual: trendAvg,
+    rawAvg: rawAvg,
+    count: entries.length,
+    entries: entries,
+    target: 0,
+    delta: 0,
+    hasPrev: false,
+    inTunnel: true
+  } as WeeklySummary;
+});
+
+// Assign targets so each week is centred on previous week's EMA + rate
+for (let i = 0; i < processedWeeks.length; i++) {
+  if (i === 0) {
+    // first week: anchor target at its own EMA (no previous week available)
+    processedWeeks[i].target = processedWeeks[i].actual;
+    processedWeeks[i].hasPrev = false;
+    processedWeeks[i].delta = 0;
+  } else {
+    const prevWeek = processedWeeks[i - 1];
+    // Always start from previous week's EMA, then add desired weekly rate
+    processedWeeks[i].target = prevWeek.actual + rate;
+    processedWeeks[i].delta = processedWeeks[i].actual - prevWeek.actual;
+    processedWeeks[i].hasPrev = true;
+  }
+
+  processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+}
+
+
     for (let i = 0; i < processedWeeks.length; i++) {
         if (i === 0) {
-            // First week establishes the baseline
             processedWeeks[i].target = processedWeeks[i].actual;
         } else {
             const prev = processedWeeks[i-1];
+            const dist = Math.abs(prev.actual - prev.target);
             
-            // LOGIC FIX:
-            // We ignore whether they were "in the tunnel" previously.
-            // The user wants the tunnel to ALWAYS reset to the previous week's ACTUAL trend.
-            // So the target for Week X is simply (Week X-1 Actual) + Rate.
-            processedWeeks[i].target = prev.actual + rate;
+            if (dist <= TARGET_TOLERANCE) {
+                processedWeeks[i].target = prev.target + rate;
+            } else {
+                processedWeeks[i].target = prev.actual + rate;
+            }
             
             processedWeeks[i].delta = processedWeeks[i].actual - prev.actual;
             processedWeeks[i].hasPrev = true;
@@ -322,6 +341,7 @@ export default function App() {
 
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
+
 
   // --- CHART DATA PREP ---
   const finalChartData = useMemo<ChartPoint[]>(() => {
@@ -356,55 +376,48 @@ export default function App() {
                 targetUpper: w.target + TARGET_TOLERANCE,
                 targetLower: w.target - TARGET_TOLERANCE,
             }));
-    } else {
-        const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-        const weekMap = new Map(weeklyData.map(w => [w.weekId, w]));
-        const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-        const allDays = getDaysArray(startDate, now);
-
-        return allDays.map(dateStr => {
-            const wKey = getWeekKey(dateStr);
-            const parentWeek = weekMap.get(wKey);
-            
-            let dailyTarget = 0;
-            let targetFound = false;
-
-            if (parentWeek) {
-                // ISO Day: 1 (Mon) - 7 (Sun)
-                const dObj = new Date(dateStr);
-                const dayNum = dObj.getDay() || 7; 
-                const dayIndex = dayNum - 1; // 0 (Mon) to 6 (Sun)
-                
-                // MATH FIX:
-                // parentWeek.target is the target value for the END/AVERAGE of the current week.
-                // We derived it as: prevWeek.actual + rate.
-                // Therefore, the START of this week's tunnel is prevWeek.actual.
-                // Which equals: parentWeek.target - rate.
-                const weekStartTarget = parentWeek.target - rate;
-                
-                // Interpolate from Start to End of the week
+          } else {
+            const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+            // Keep an ordered array of weeks for index arithmetic
+            const orderedWeeks = weeklyData.slice().sort((a,b) => a.weekId.localeCompare(b.weekId));
+            const weekIndexMap = new Map(orderedWeeks.map((w, idx) => [w.weekId, idx]));
+            const weightMap = new Map(weights.map(w => [w.date, w.weight]));
+            const allDays = getDaysArray(startDate, now);
+          
+            return allDays.map(dateStr => {
+              const wKey = getWeekKey(dateStr);
+              const parentWeek = orderedWeeks[weekIndexMap.get(wKey) ?? -1];
+          
+              let dailyTarget = 0;
+              let targetFound = false;
+          
+              if (parentWeek) {
+                const parentIdx = weekIndexMap.get(wKey)!;
+                const prevWeek = orderedWeeks[parentIdx - 1]; // may be undefined for first week
+          
+                // determine the start of growth for this week: previous week's EMA (if exists), otherwise use parentWeek.actual - rate
+                const startEMA = prevWeek ? prevWeek.actual : (parentWeek.actual - rate);
+          
+                // dayIndex: 0..6 (Mon..Sun). Use a consistent progression across the 7 days
+                const dayNum = new Date(dateStr).getDay();
+                const dayIndex = dayNum === 0 ? 6 : dayNum - 1;
                 const dailyProgress = (dayIndex + 1) / 7;
-                dailyTarget = weekStartTarget + (rate * dailyProgress);
+          
+                dailyTarget = startEMA + (rate * dailyProgress);
                 targetFound = true;
-            }
-
-            // We only filter out points where we absolutely cannot calculate a target
-            // AND there is no actual data. If there is actual data, we plot it regardless.
-            const hasData = weightMap.has(dateStr);
-            const hasTrend = trendMap.has(dateStr);
-
-            if (!targetFound && !hasData && !hasTrend) return null;
-
-            return {
+              }
+          
+              return {
                 label: dateStr,
-                actual: hasData ? weightMap.get(dateStr)! : null,
-                trend: hasTrend ? trendMap.get(dateStr)! : null,
+                actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
+                trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
                 target: targetFound ? dailyTarget : 0,
                 targetUpper: targetFound ? dailyTarget + TARGET_TOLERANCE : 0,
                 targetLower: targetFound ? dailyTarget - TARGET_TOLERANCE : 0,
-            };
-        }).filter((p): p is ChartPoint => p !== null); 
-    }
+              };
+            }).filter(p => p.target !== 0);
+          }
+          
   }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
 
   // --- ACTIONS ---
