@@ -121,7 +121,8 @@ const getDaysArray = (start: Date, end: Date) => {
 };
 
 // RGB Interpolation Helper
-const interpolateColor = (diff: number, tolerance: number) => {
+// FIX: Removed unused 'tolerance' parameter
+const interpolateColor = (diff: number) => {
     // Colors (R, G, B)
     const cGreen = [16, 185, 129]; // Emerald 500
     const cOrange = [251, 191, 36]; // Amber 400
@@ -405,7 +406,8 @@ export default function App() {
 
             let prevDayTrend = lastKnownTrend;
 
-            return allDays.map((dateStr, index) => {
+            // FIX: Removed unused 'index' parameter from callback
+            return allDays.map((dateStr) => {
               // Update trend if we have a real data point this day
               if (trendMap.has(dateStr)) {
                   lastKnownTrend = trendMap.get(dateStr)!;
@@ -675,8 +677,8 @@ export default function App() {
             // Deviation
             const diff = Math.abs(currentSlope - targetSlope);
             
-            // Get Gradual Color
-            const color = interpolateColor(diff, RATE_TOLERANCE_GREEN);
+            // FIX: Removed 'RATE_TOLERANCE_GREEN' usage, using only diff
+            const color = interpolateColor(diff);
             
             const offset = (i / denominator) * 100;
             
