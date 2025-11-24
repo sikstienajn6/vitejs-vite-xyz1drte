@@ -32,7 +32,6 @@ import {
   Clock,
   LogOut,
   LogIn,
-  AlertCircle,
   Info,
   Utensils
 } from 'lucide-react';
@@ -350,20 +349,38 @@ export default function App() {
                 trend: w.actual, 
                 target: w.target
             }));
-          } else {
+    } else {
             const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-            // Keep an ordered array of weeks for index arithmetic
             const orderedWeeks = weeklyData.slice().sort((a,b) => a.weekId.localeCompare(b.weekId));
             const weekIndexMap = new Map(orderedWeeks.map((w, idx) => [w.weekId, idx]));
             const weightMap = new Map(weights.map(w => [w.date, w.weight]));
             const allDays = getDaysArray(startDate, now);
-          
+            
+            // To prevent the line from breaking on days without data, we need to hold the last known trend.
+            // Find the starting trend value (closest value before start date)
+            let lastKnownTrend = 0;
+            // Scan backwards from startDate to find a seed value if possible
+            const startStr = startDate.toISOString().split('T')[0];
+            const sortedDates = Array.from(trendMap.keys()).sort();
+            for (let i = sortedDates.length - 1; i >= 0; i--) {
+                if (sortedDates[i] <= startStr) {
+                    lastKnownTrend = trendMap.get(sortedDates[i]) || 0;
+                    break;
+                }
+            }
+            if (lastKnownTrend === 0 && sortedDates.length > 0) lastKnownTrend = trendMap.get(sortedDates[0]) || 0;
+
             return allDays.map(dateStr => {
               const wKey = getWeekKey(dateStr);
               const parentWeek = orderedWeeks[weekIndexMap.get(wKey) ?? -1];
           
               let dailyTarget = 0;
               let targetFound = false;
+              
+              // Fill Trend Logic: Update if new data exists, else hold previous
+              if (trendMap.has(dateStr)) {
+                  lastKnownTrend = trendMap.get(dateStr)!;
+              }
           
               if (parentWeek) {
                 const parentIdx = weekIndexMap.get(wKey)!;
@@ -383,11 +400,11 @@ export default function App() {
               return {
                 label: dateStr,
                 actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
-                trend: trendMap.has(dateStr) ? trendMap.get(dateStr)! : null,
+                trend: lastKnownTrend, // Use filled trend
                 target: targetFound ? dailyTarget : 0
               };
-            }).filter(p => p.target !== 0);
-          }
+            }).filter(p => p.trend !== 0); // Only filter if we have absolutely no data history yet
+    }
           
   }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
 
@@ -578,7 +595,7 @@ export default function App() {
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height, width }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number }) => {
+  const ChartRenderer = ({ data, mode, height, width, settings }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null }) => {
     if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log data to see trend</p>
@@ -618,22 +635,26 @@ export default function App() {
     const gridCount = 5;
     const gridStops = Array.from({length: gridCount}, (_, i) => minVal + (range * (i / (gridCount-1))));
 
-    let trendPath = '';
-    if (count > 1) {
-        let lastValidT = -1;
-        data.forEach((d, i) => {
-            if (d.trend === null) return;
-            const x = getX(i);
-            const y = getY(d.trend);
-            if (lastValidT === -1) trendPath += `M ${x},${y} `;
-            else {
-                const distance = i - lastValidT;
-                if (distance > BREAK_LINE_THRESHOLD_DAYS) trendPath += `M ${x},${y} `;
-                else trendPath += `L ${x},${y} `; 
-            }
-            lastValidT = i;
-        });
-    }
+    // --- SLOPE COLOR CALCULATOR ---
+    const getSegmentColor = (curr: number, prev: number) => {
+        if (!settings) return '#10b981';
+        
+        // Calculate raw deviation between points (slope)
+        const slope = curr - prev; 
+        // Normalize Target Slope: Weekly Rate / 7 (approx daily) or 1 (weekly)
+        const divisor = mode === 'weekly' ? 1 : 7;
+        const targetSlope = settings.weeklyRate / divisor;
+        
+        const diff = Math.abs(slope - targetSlope);
+        
+        // Thresholds (scaled to mode)
+        const tGreen = RATE_TOLERANCE_GREEN / divisor; // approx 0.014 daily
+        const tOrange = RATE_TOLERANCE_ORANGE / divisor; // approx 0.035 daily
+        
+        if (diff <= tGreen) return '#10b981'; // Emerald (Good)
+        if (diff <= tOrange) return '#fbbf24'; // Amber (Warning)
+        return '#ef4444'; // Red (Bad)
+    };
 
     // --- SMART AXIS LOGIC ---
     const minLabelSpacing = 35; 
@@ -647,7 +668,7 @@ export default function App() {
       >
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
-          {/* HORIZONTAL GRID & Y-AXIS LABELS (Always Visible) */}
+          {/* HORIZONTAL GRID & Y-AXIS LABELS */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
@@ -658,10 +679,32 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TREND LINE (Solid Emerald) */}
-          {count > 1 && (
-              <path d={trendPath} fill="none" stroke="#10b981" strokeWidth={expanded ? "3" : "2"} strokeLinecap="round" strokeLinejoin="round" />
-          )}
+          {/* COLORED TREND LINES (Segments) */}
+          {count > 1 && data.map((d, i) => {
+              if (i === 0) return null;
+              const prev = data[i-1];
+              if (d.trend === null || prev.trend === null) return null;
+
+              const x1 = getX(i - 1);
+              const y1 = getY(prev.trend);
+              const x2 = getX(i);
+              const y2 = getY(d.trend);
+              
+              // Don't draw if gap is too large (missing data for > week)
+              // In daily mode, we fixed gaps via fill-forward, so this mostly applies to actual long breaks
+              // Check index distance just in case
+              const color = getSegmentColor(d.trend, prev.trend);
+
+              return (
+                  <line 
+                    key={i} 
+                    x1={x1} y1={y1} x2={x2} y2={y2} 
+                    stroke={color} 
+                    strokeWidth={expanded ? "3" : "2"} 
+                    strokeLinecap="round" 
+                  />
+              );
+          })}
 
           {/* DATA POINTS */}
           {data.map((d, i) => {
@@ -826,7 +869,7 @@ export default function App() {
                         </div>
                     </div>
 
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} />
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} />
                     
                     <div 
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
@@ -842,7 +885,7 @@ export default function App() {
                                 <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
                                     <Info size={12} className="text-blue-500" /> EMA model
                                 </div>
-                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations to reveal your true weight trend, ignoring water weight spikes.</p>
+                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations. <span className="text-emerald-400">Green</span> line segments mean your pace matches your goal. <span className="text-amber-400">Orange</span> or <span className="text-red-400">Red</span> means you are stalling or moving too fast.</p>
                             </div>
                         )}
 
