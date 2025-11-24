@@ -372,8 +372,9 @@ export default function App() {
 
     const now = new Date();
     
-    // FIXED: Explicit null check for last item
-    const lastWeekItem = weeklyData[weeklyData.length - 1];
+    // EXPLICIT SAFE ACCESS
+    // Ensure we do not access property of potentially null object
+    const lastWeekItem = weeklyData.length > 0 ? weeklyData[weeklyData.length - 1] : null;
     const latestLogged = lastWeekItem ? new Date(lastWeekItem.startDate) : now;
     
     // Show chart up to whichever is later: Today or the projected future week
@@ -381,9 +382,9 @@ export default function App() {
 
     let startDate = new Date('2000-01-01'); 
     
-    // FIXED: Explicit null check for weights
-    const firstWeightItem = weights[weights.length-1];
-    const earliestDataDate = new Date(firstWeightItem?.date || now);
+    // EXPLICIT SAFE ACCESS for earliest date
+    const firstWeightItem = weights.length > 0 ? weights[weights.length-1] : null;
+    const earliestDataDate = new Date(firstWeightItem ? firstWeightItem.date : now);
 
     if (filterRange === '1M') {
         startDate = new Date();
