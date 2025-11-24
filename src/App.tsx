@@ -56,7 +56,6 @@ const TARGET_TOLERANCE = 0.2;
 const EMA_ALPHA = 0.1; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
-const BREAK_LINE_THRESHOLD_DAYS = 7; 
 
 // Height Constants
 const HEIGHT_COMPRESSED = 250;
@@ -690,9 +689,6 @@ export default function App() {
               const x2 = getX(i);
               const y2 = getY(d.trend);
               
-              // Don't draw if gap is too large (missing data for > week)
-              // In daily mode, we fixed gaps via fill-forward, so this mostly applies to actual long breaks
-              // Check index distance just in case
               const color = getSegmentColor(d.trend, prev.trend);
 
               return (
