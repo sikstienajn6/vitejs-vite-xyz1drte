@@ -6,7 +6,9 @@ import {
   GoogleAuthProvider,
   signOut,
   onAuthStateChanged,
-  type User 
+  type User,
+  signInWithCustomToken, // Added for TS compiler
+  signInAnonymously // Added for TS compiler
 } from 'firebase/auth';
 import { 
   getFirestore, 
@@ -37,12 +39,15 @@ import {
   Utensils
 } from 'lucide-react';
 
-// Load Tailwind CSS for styling
-// <script src="https://cdn.tailwindcss.com"></script> (Assumed available in React environment)
+// --- GLOBAL VARIABLE DECLARATION for TypeScript ---
+// This informs the TS compiler that these variables exist in the global scope 
+// (provided by the Canvas runtime environment).
+declare global {
+    var __firebase_config: string | undefined;
+    var __initial_auth_token: string | undefined;
+}
 
 // --- CONFIGURATION ---
-// IMPORTANT: In a real environment, __firebase_config and __initial_auth_token 
-// would be injected by the runtime environment. I am using placeholders here.
 const firebaseConfig = {
   apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE",
   authDomain: "weighttracker-b4b79.firebaseapp.com",
@@ -172,6 +177,7 @@ export default function App() {
   useEffect(() => {
     const initializeAuth = async () => {
         try {
+            // Check for the global token using the defined global scope
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                 await signInWithCustomToken(auth, __initial_auth_token);
             } else {
@@ -210,7 +216,7 @@ export default function App() {
     } catch (error: any) {
       console.error("Login initiation failed:", error);
       // In a production app, use a custom modal instead of alert
-      alert("Login failed: " + error.message); 
+      console.log("Login failed: " + error.message); 
     }
   };
 
@@ -420,6 +426,7 @@ export default function App() {
             if (parentWeek) {
                 // Find the previous week's trend (the anchor)
                 const prevWeekIndex = weeklyData.findIndex(w => w.weekId === wKey) - 1;
+                // If previous week exists, use its trend as the anchor. Otherwise, use the current week's trend (for the starting week).
                 const anchorTrend = prevWeekIndex >= 0 ? weeklyData[prevWeekIndex].actual : weeklyData[0].actual;
                 
                 // Calculate difference in days from the week anchor's start date
