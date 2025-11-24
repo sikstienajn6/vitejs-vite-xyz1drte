@@ -531,6 +531,53 @@ export default function App() {
   };
 
   // --- ADVICE LOGIC ---
+  const getWeekTrendStatus = (delta: number) => {
+    if (!settings) return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500' };
+    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
+    let status: 'ok' | 'slow' | 'fast' = 'ok';
+    let action: 'none' | 'add' | 'remove' = 'none';
+    
+    if (goalType === 'gain') {
+        if (delta < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
+        else if (delta > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
+    } else {
+        const targetSigned = -targetAbs;
+        if (delta > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
+        else if (delta < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
+    }
+
+    if (status === 'ok') {
+        return { 
+            status: 'ok', 
+            text: 'Trend: On Track', 
+            color: 'text-emerald-500',
+            advice: 'On track. Maintain current calories.'
+        };
+    }
+    
+    if (action === 'add') {
+        const adviceText = goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.';
+        return { 
+            status: 'slow', 
+            text: 'Trend: Stalling', 
+            color: 'text-amber-500',
+            advice: adviceText
+        };
+    }
+    
+    if (action === 'remove') {
+        const adviceText = goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.';
+        return { 
+            status: 'fast', 
+            text: 'Trend: Deviated', 
+            color: 'text-rose-500',
+            advice: adviceText
+        };
+    }
+    
+    return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
+  };
+
   const getAdvice = () => {
     if (!settings) return null;
     const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
@@ -1101,11 +1148,18 @@ export default function App() {
                                 </div>
                                 <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
                                 </div>
-                                {isExpanded && (
+                                {isExpanded && (() => {
+                                    const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
+                                    return (
                                 <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                                    <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
-                                        <span>Daily Entries</span>
-                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Trend: On Track' : 'Trend: Deviated'}</span>
+                                    <div className="flex flex-col gap-2 mb-2">
+                                        <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                                            <span>Daily Entries</span>
+                                            <span className={trendStatus.color}>{trendStatus.text}</span>
+                                        </div>
+                                        <div className="text-[10px] text-slate-400">
+                                            {trendStatus.advice}
+                                        </div>
                                     </div>
                                     <div className="space-y-2">
                                     {item.entries.map((entry) => (
@@ -1119,7 +1173,8 @@ export default function App() {
                                     ))}
                                     </div>
                                 </div>
-                                )}
+                                    );
+                                })()}
                             </div>
                             );
                         })}
