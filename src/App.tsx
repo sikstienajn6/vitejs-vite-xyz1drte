@@ -32,7 +32,8 @@ import {
   Clock,
   LogOut,
   LogIn,
-  Info
+  Info,
+  Utensils
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -53,11 +54,6 @@ const googleProvider = new GoogleAuthProvider();
 // --- LOGIC CONSTANTS ---
 const TARGET_TOLERANCE = 0.2; 
 const EMA_ALPHA = 0.1; 
-
-// --- USER CONFIGURABLE TOLERANCES ---
-const WEEKLY_TUNNEL_WIDTH = 0.3; // +/- kg allowed in Weekly View
-const DAILY_TUNNEL_WIDTH = 0.8;  // +/- kg allowed in Daily View
-
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
 
@@ -103,9 +99,9 @@ interface ChartPoint {
 interface ProjectionData {
   anchorDate: Date;
   anchorVal: number;
-  anchorIndex: number; // Added for column-based snapping
   dailySlope: number;
   weeklySlope: number; 
+  anchorIndex?: number;
 }
 
 // --- Helper Functions ---
@@ -355,14 +351,13 @@ export default function App() {
   }, [weights, settings]);
 
 
-  // --- PROJECTION DATA ---
+  // --- PROJECTION DATA (The "Green Line" logic) ---
   const projectionData = useMemo<ProjectionData | null>(() => {
     if (!settings || weights.length === 0) return null;
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
     const dailySlope = rate / 7;
 
     if (chartMode === 'daily') {
-        // Daily: Anchor is "Next to Last" (1)
         const anchorIndex = weights.length > 1 ? 1 : 0;
         const anchorEntry = weights[anchorIndex];
         const anchorVal = trendMap.get(anchorEntry.date) ?? anchorEntry.weight;
@@ -370,12 +365,11 @@ export default function App() {
         return {
             anchorDate: new Date(anchorEntry.date),
             anchorVal: anchorVal,
-            anchorIndex: anchorIndex,
             dailySlope: dailySlope,
             weeklySlope: rate
         };
     } else {
-        // Weekly: Anchor is "Next to Last" (length-2 because weekly is sorted Ascending)
+        // Weekly: Anchor is the "Next to Last" week's trend
         const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
         const anchorWeek = weeklyData[anchorIndex];
         const anchorDate = new Date(anchorWeek.entries[0].date); 
@@ -383,9 +377,9 @@ export default function App() {
         return {
             anchorDate: anchorDate,
             anchorVal: anchorWeek.actual,
-            anchorIndex: anchorIndex, // This index is in the full weeklyData array
             dailySlope: dailySlope,
-            weeklySlope: rate
+            weeklySlope: rate,
+            anchorIndex: anchorIndex
         };
     }
   }, [weights, weeklyData, chartMode, settings, trendMap]);
@@ -551,6 +545,40 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
+  // --- ADVICE LOGIC ---
+  const getAdvice = () => {
+    if (!settings) return null;
+    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
+    const rate = currentTrendRate;
+    let status: 'ok' | 'slow' | 'fast' = 'ok';
+    let action: 'none' | 'add' | 'remove' = 'none';
+    
+    if (goalType === 'gain') {
+        if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
+        else if (rate > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
+    } else {
+        const targetSigned = -targetAbs;
+        if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
+        else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
+    }
+
+    if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
+    
+    if (action === 'add') return { 
+        color: 'bg-amber-500/10 border-amber-500/20 text-amber-200', 
+        text: goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.' 
+    };
+    
+    if (action === 'remove') return { 
+        color: 'bg-rose-500/10 border-rose-500/20 text-rose-200', 
+        text: goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.' 
+    };
+    
+    return null;
+  };
+
+  const advice = getAdvice();
+
   // --- DRAG & SNAP LOGIC ---
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
@@ -644,6 +672,8 @@ export default function App() {
     
     const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
     const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
+    const axisLineY = height - padding.bottom;
+    const clampToAxis = (val: number) => Math.min(val, axisLineY);
 
     // --- GRID LINES ---
     const gridCount = 5;
@@ -679,6 +709,13 @@ export default function App() {
         return stopList;
     }, [data, settings, mode, denominator]);
 
+    // --- WEEKLY ANCHOR LOOKUP ---
+    const weeklyAnchorIndex = useMemo(() => {
+        if (mode !== 'weekly' || !projection) return 0;
+        const idx = data.findIndex(d => d.dateObj.toDateString() === projection.anchorDate.toDateString());
+        return idx >= 0 ? idx : 0;
+    }, [data, mode, projection]);
+
     // --- TREND LINE PATH ---
     let trendPath = '';
     if (count > 1) {
@@ -699,18 +736,21 @@ export default function App() {
     
     if (projection && data.length > 0) {
         const msPerDay = 86400000;
-        const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
+        const tunnelTolerance = mode === 'weekly' ? 0.3 : 0.8;
         
+        // Arrays to store polygon points for tunnel
         const upperPoints: [number, number][] = [];
         const lowerPoints: [number, number][] = [];
-        
+
         data.forEach((d, i) => {
              let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
 
-             // --- SNAP LOGIC FOR WEEKLY VIEW ---
+            // --- SNAP LOGIC FOR WEEKLY VIEW ---
              if (mode === 'weekly') {
-                 const diffWeeks = Math.round(diffDays / 7);
+                // Align steps strictly by rendered week index to preserve constant slope
+                const anchorIdx = projection.anchorIndex ?? weeklyAnchorIndex;
+                const diffWeeks = i - anchorIdx;
                  idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
              } else {
                  // Daily mode: Use exact linear time
@@ -725,10 +765,11 @@ export default function App() {
              else projectionPath += `L ${x},${y} `;
              
              // Construct tunnel points (Upper/Lower based on +/- tolerance)
-             // CLIPPED to Axis Line (height - padding.bottom)
-             const axisY = height - padding.bottom;
-             const yUpper = Math.min(axisY, getY(idealY + tunnelTolerance));
-             const yLower = Math.min(axisY, getY(idealY - tunnelTolerance));
+             // Note: In SVG coords, lower value is higher on screen. 
+             // "Upper visual limit" corresponds to Higher Weight = idealY + tol
+             // "Lower visual limit" corresponds to Lower Weight = idealY - tol
+             const yUpper = clampToAxis(getY(idealY + tunnelTolerance));
+             const yLower = clampToAxis(getY(idealY - tunnelTolerance));
              
              upperPoints.push([x, yUpper]);
              lowerPoints.push([x, yLower]);
@@ -807,7 +848,6 @@ export default function App() {
              <path 
                 d={trendPath} 
                 fill="none" 
-                // Updated Color Logic: Emerald for Daily, Gradient for Weekly
                 stroke={mode === 'weekly' ? "url(#trendGradient)" : "#10b981"} 
                 strokeWidth={expanded ? "3" : "2"} 
                 strokeLinecap="round" 
@@ -827,7 +867,7 @@ export default function App() {
                         cx={px} 
                         cy={py} 
                         r={expanded ? 3.5 : 2} 
-                        fill="#10b981" // Emerald
+                        fill="#10b981" 
                         opacity={expanded ? "0.9" : "0.6"}
                     />
                     {expanded && (
@@ -943,6 +983,13 @@ export default function App() {
                     </div>
                 </div>
 
+                {advice && (
+                    <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color}`}>
+                        <Utensils size={18} className="shrink-0 mt-0.5" />
+                        <span className="text-sm font-semibold">{advice.text}</span>
+                    </div>
+                )}
+
                 <section className="flex flex-col" ref={containerRef}>
                     <div className="flex justify-between items-end mb-2 px-1 gap-1">
                         <div className="shrink-0">
@@ -977,10 +1024,13 @@ export default function App() {
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
                         style={{ touchAction: 'none' }} 
                     >
-                        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-3/4 mx-auto">
+                        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-5/6 mx-auto">
                             <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500 opacity-60"></div>Readings</div>
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 bg-emerald-500/20 border border-emerald-500/50"></div>Tunnel</div>
+                            <div className="flex items-center justify-center gap-1">
+                                <div className="w-3 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
+                                Tunnel
+                            </div>
+                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
                         </div>
 
                         {showExplanation && (
