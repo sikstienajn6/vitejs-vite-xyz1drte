@@ -893,17 +893,6 @@ export default function App() {
         return stopList;
     }, [data, settings, mode, denominator, weekDeltaMap]);
 
-    // --- WEEKLY ANCHOR LOOKUP ---
-    const weeklyAnchorIndex = useMemo(() => {
-        if (mode !== 'weekly' || !projection) return 0;
-        // For weekly mode, the anchor index should match the week's position in the filtered data
-        // Find the data point that corresponds to the anchor week
-        // In weekly mode, d.label is the week key (weekId)
-        const anchorWeekKey = getWeekKey(projection.anchorDate.toISOString().split('T')[0]);
-        const idx = data.findIndex(d => d.label === anchorWeekKey);
-        return idx >= 0 ? idx : 0;
-    }, [data, mode, projection]);
-
     // --- TREND LINE PATH ---
     let trendPath = '';
     if (count > 1) {
