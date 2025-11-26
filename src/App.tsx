@@ -57,6 +57,8 @@ const TARGET_TOLERANCE = 0.2;
 const EMA_ALPHA = 0.1; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
+const WEEKLY_TUNNEL_WIDTH = 0.3;
+const DAILY_TUNNEL_WIDTH = 0.8;
 
 // Height Constants
 const HEIGHT_COMPRESSED = 250;
@@ -752,10 +754,36 @@ export default function App() {
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     // --- SCALING CALCULATIONS ---
+    // Calculate tunnel tolerance based on mode
+    const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
+    
+    // Collect all values including tunnel boundaries for proper scaling
     const validValues = data.flatMap(d => {
         const vals = [];
         if (d.actual !== null) vals.push(d.actual);
         if (d.trend !== null) vals.push(d.trend);
+        
+        // Include tunnel boundaries if projection exists
+        if (projection && settings) {
+            const msPerDay = 86400000;
+            let idealY = 0;
+            
+            if (mode === 'weekly') {
+                // Calculate week difference mathematically
+                const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+                const diffWeeks = Math.round(diffDays / 7);
+                idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
+            } else {
+                // Daily mode: Use exact linear time
+                const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+                idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+            }
+            
+            // Include tunnel boundaries (± tolerance)
+            vals.push(idealY + tunnelTolerance);
+            vals.push(idealY - tunnelTolerance);
+        }
+        
         return vals;
     });
     
@@ -896,7 +924,6 @@ export default function App() {
     
     if (projection && data.length > 0) {
         const msPerDay = 86400000;
-        const tunnelTolerance = mode === 'weekly' ? 0.3 : 0.8;
         
         // Arrays to store polygon points for tunnel
         const upperPoints: [number, number][] = [];
@@ -906,13 +933,12 @@ export default function App() {
              let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
 
-            // --- SNAP LOGIC FOR WEEKLY VIEW ---
+            // --- PROJECTION LOGIC ---
              if (mode === 'weekly') {
-                // Align steps strictly by rendered week index to preserve constant slope
-                // Use weeklyAnchorIndex which is calculated from the actual filtered data array
-                const anchorIdx = weeklyAnchorIndex;
-                const diffWeeks = i - anchorIdx;
-                 idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
+                // Use mathematical week difference to ensure accuracy even with filtered data
+                // This handles cases where the anchor point might be off-screen
+                const diffWeeks = Math.round(diffDays / 7);
+                idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
              } else {
                  // Daily mode: Use exact linear time
                  idealY = projection.anchorVal + (diffDays * projection.dailySlope);
