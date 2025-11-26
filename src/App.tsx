@@ -868,7 +868,11 @@ export default function App() {
     // --- WEEKLY ANCHOR LOOKUP ---
     const weeklyAnchorIndex = useMemo(() => {
         if (mode !== 'weekly' || !projection) return 0;
-        const idx = data.findIndex(d => d.dateObj.toDateString() === projection.anchorDate.toDateString());
+        // For weekly mode, the anchor index should match the week's position in the filtered data
+        // Find the data point that corresponds to the anchor week
+        // In weekly mode, d.label is the week key (weekId)
+        const anchorWeekKey = getWeekKey(projection.anchorDate.toISOString().split('T')[0]);
+        const idx = data.findIndex(d => d.label === anchorWeekKey);
         return idx >= 0 ? idx : 0;
     }, [data, mode, projection]);
 
@@ -905,7 +909,8 @@ export default function App() {
             // --- SNAP LOGIC FOR WEEKLY VIEW ---
              if (mode === 'weekly') {
                 // Align steps strictly by rendered week index to preserve constant slope
-                const anchorIdx = projection.anchorIndex ?? weeklyAnchorIndex;
+                // Use weeklyAnchorIndex which is calculated from the actual filtered data array
+                const anchorIdx = weeklyAnchorIndex;
                 const diffWeeks = i - anchorIdx;
                  idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
              } else {
