@@ -1295,7 +1295,7 @@ export default function App() {
                                         </div>
                                     </div>
                                     <div className="space-y-2">
-                                    {item.entries.map((entry) => (
+                                    {item.entries.slice().reverse().map((entry) => (
                                         <div key={entry.id} className="flex justify-between items-center text-sm">
                                         <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
                                         <div className="flex items-center gap-3">
