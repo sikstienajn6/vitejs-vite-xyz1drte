@@ -185,7 +185,7 @@ export default function App() {
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87');
-  const [dismissedAdvice, setDismissedAdvice] = useState(false); 
+  const [dismissedAdviceText, setDismissedAdviceText] = useState<string | null>(null); 
 
   // --- AUTH ---
   useEffect(() => {
@@ -581,11 +581,30 @@ export default function App() {
   };
 
   const advice = getAdvice();
-  const showAdvice = advice && !dismissedAdvice;
-
-  // Reset dismissed state when advice changes
+  
+  // Load dismissed advice from localStorage on mount
   useEffect(() => {
-    setDismissedAdvice(false);
+    if (user) {
+      const stored = localStorage.getItem('dismissedAdviceText');
+      if (stored) {
+        setDismissedAdviceText(stored);
+      }
+    }
+  }, [user]);
+
+  // Show advice only if it exists and hasn't been dismissed (or is different advice)
+  const showAdvice = advice && advice.text !== dismissedAdviceText;
+
+  // Clear dismissed state when advice text changes to something new (new advice appeared)
+  useEffect(() => {
+    if (advice?.text) {
+      const stored = localStorage.getItem('dismissedAdviceText');
+      if (stored && stored !== advice.text) {
+        // New advice appeared, clear the dismissed state
+        setDismissedAdviceText(null);
+        localStorage.removeItem('dismissedAdviceText');
+      }
+    }
   }, [advice?.text]);
 
   // --- EXPORT FUNCTIONALITY ---
@@ -1059,7 +1078,12 @@ export default function App() {
                         <Utensils size={18} className="shrink-0" />
                         <span className="text-sm font-semibold flex-1">{advice.text}</span>
                         <button 
-                            onClick={() => setDismissedAdvice(true)}
+                            onClick={() => {
+                              if (advice) {
+                                setDismissedAdviceText(advice.text);
+                                localStorage.setItem('dismissedAdviceText', advice.text);
+                              }
+                            }}
                             className="shrink-0 w-6 h-6 rounded-full border border-current/30 flex items-center justify-center hover:bg-current/10 transition-colors"
                             aria-label="Dismiss"
                         >
