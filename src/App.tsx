@@ -34,7 +34,8 @@ import {
   LogIn,
   Info,
   Utensils,
-  Check
+  X,
+  Download
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -57,8 +58,6 @@ const TARGET_TOLERANCE = 0.2;
 const EMA_ALPHA = 0.1; 
 const RATE_TOLERANCE_GREEN = 0.1;
 const RATE_TOLERANCE_ORANGE = 0.25;
-const WEEKLY_TUNNEL_WIDTH = 0.3;
-const DAILY_TUNNEL_WIDTH = 0.8;
 
 // Height Constants
 const HEIGHT_COMPRESSED = 250;
@@ -115,16 +114,6 @@ const getWeekKey = (date: string) => {
   const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
   const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
-};
-
-const getLastSundayWeekKey = () => {
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  // Get the most recent Sunday
-  const daysSinceSunday = dayOfWeek === 0 ? 0 : dayOfWeek;
-  const lastSunday = new Date(today);
-  lastSunday.setDate(today.getDate() - daysSinceSunday);
-  return getWeekKey(lastSunday.toISOString().split('T')[0]);
 };
 
 const formatDate = (dateString: string) => {
@@ -196,7 +185,7 @@ export default function App() {
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87');
-  const [dismissedAdviceWeeks, setDismissedAdviceWeeks] = useState<string[]>([]); 
+  const [dismissedAdvice, setDismissedAdvice] = useState(false); 
 
   // --- AUTH ---
   useEffect(() => {
@@ -267,22 +256,9 @@ export default function App() {
       }
     }, (err) => console.error("Settings fetch error:", err));
 
-    // Fetch dismissed advice weeks
-    // @ts-ignore
-    const dismissedRef = doc(db, 'users', user.uid, 'settings', 'dismissedAdvice');
-    const unsubDismissed = onSnapshot(dismissedRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setDismissedAdviceWeeks(data?.weeks || []);
-      } else {
-        setDismissedAdviceWeeks([]);
-      }
-    }, (err) => console.error("Dismissed advice fetch error:", err));
-
     return () => {
       unsubWeights();
       unsubSettings();
-      unsubDismissed();
     };
   }, [user]);
 
@@ -357,7 +333,22 @@ export default function App() {
       processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
     }
 
-    const currentRate = processedWeeks.length > 1 ? processedWeeks[processedWeeks.length - 1].delta : 0;
+    const lastEntry = sortedWeights[sortedWeights.length - 1];
+    const lastTrend = tMap.get(lastEntry.date) || 0;
+    
+    const sevenDaysAgo = new Date(lastEntry.date);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sdaString = sevenDaysAgo.toISOString().split('T')[0];
+    
+    let prevTrend = lastTrend; 
+    for(let i = sortedWeights.length - 2; i >= 0; i--) {
+        if (sortedWeights[i].date <= sdaString) {
+            prevTrend = tMap.get(sortedWeights[i].date) || 0;
+            break;
+        }
+    }
+    
+    const currentRate = lastTrend - prevTrend;
 
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
@@ -558,53 +549,6 @@ export default function App() {
   };
 
   // --- ADVICE LOGIC ---
-  const getWeekTrendStatus = (delta: number) => {
-    if (!settings) return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500' };
-    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
-    let status: 'ok' | 'slow' | 'fast' = 'ok';
-    let action: 'none' | 'add' | 'remove' = 'none';
-    
-    if (goalType === 'gain') {
-        if (delta < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
-        else if (delta > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
-    } else {
-        const targetSigned = -targetAbs;
-        if (delta > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (delta < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
-    }
-
-    if (status === 'ok') {
-        return { 
-            status: 'ok', 
-            text: 'Trend: On Track', 
-            color: 'text-emerald-500',
-            advice: 'On track. Maintain current calories.'
-        };
-    }
-    
-    if (action === 'add') {
-        const adviceText = goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.';
-        return { 
-            status: 'slow', 
-            text: 'Trend: Stalling', 
-            color: 'text-amber-500',
-            advice: adviceText
-        };
-    }
-    
-    if (action === 'remove') {
-        const adviceText = goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.';
-        return { 
-            status: 'fast', 
-            text: 'Trend: Deviated', 
-            color: 'text-rose-500',
-            advice: adviceText
-        };
-    }
-    
-    return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
-  };
-
   const getAdvice = () => {
     if (!settings) return null;
     const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
@@ -636,54 +580,47 @@ export default function App() {
     return null;
   };
 
-  const baseAdvice = getAdvice();
-  
-  // --- ADVICE DISPLAY LOGIC (Sunday-only with dismiss) ---
-  const shouldShowAdvice = useMemo(() => {
-    if (!baseAdvice || !settings || weeklyData.length === 0) return false;
-    
-    // Need at least one complete week of data
-    if (weeklyData.length < 1) return false;
-    
-    // Get the week key for the most recent Sunday
-    // Advice appears on Sunday for the week that just ended
-    const lastSundayWeekKey = getLastSundayWeekKey();
-    
-    // Check if this week's advice has been dismissed
-    if (dismissedAdviceWeeks.includes(lastSundayWeekKey)) {
-      return false;
+  const advice = getAdvice();
+  const showAdvice = advice && !dismissedAdvice;
+
+  // Reset dismissed state when advice changes
+  useEffect(() => {
+    setDismissedAdvice(false);
+  }, [advice?.text]);
+
+  // --- EXPORT FUNCTIONALITY ---
+  const handleExport = () => {
+    if (weights.length === 0) {
+      alert('No data to export');
+      return;
     }
+
+    // Sort weights by date
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
     
-    // Check if we have data for this week (need at least one week to show advice)
-    // The advice is for the most recent Sunday's week, so we need that week to exist in our data
-    const hasDataForWeek = weeklyData.some(w => w.weekId === lastSundayWeekKey);
-    if (!hasDataForWeek) {
-      // If we don't have data for the last Sunday's week yet, don't show
-      // This handles the case where it's Sunday but we haven't completed that week yet
-      return false;
-    }
-    
-    // Show advice (it appears on Sunday and stays until dismissed or next Sunday)
-    return true;
-  }, [baseAdvice, settings, weeklyData, dismissedAdviceWeeks]);
-  
-  const advice = shouldShowAdvice ? baseAdvice : null;
-  
-  // Handler to dismiss advice
-  const handleDismissAdvice = async () => {
-    if (!user) return;
-    const lastSundayWeekKey = getLastSundayWeekKey();
-    const updatedWeeks = [...dismissedAdviceWeeks, lastSundayWeekKey];
-    
-    try {
-      // @ts-ignore
-      await setDoc(doc(db, 'users', user.uid, 'settings', 'dismissedAdvice'), {
-        weeks: updatedWeeks,
-        updatedAt: serverTimestamp()
+    // Create CSV content
+    const headers = 'Date,Weight (kg)\n';
+    const rows = sortedWeights.map(entry => {
+      const date = new Date(entry.date).toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: '2-digit', 
+        day: '2-digit' 
       });
-    } catch (err) {
-      console.error("Error dismissing advice:", err);
-    }
+      return `${date},${entry.weight}`;
+    }).join('\n');
+    
+    const csvContent = headers + rows;
+    
+    // Create blob and download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `weight-data-${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // --- DRAG & SNAP LOGIC ---
@@ -740,7 +677,7 @@ export default function App() {
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height, width, settings, projection, weeklyData }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null, weeklyData: WeeklySummary[] }) => {
+  const ChartRenderer = ({ data, mode, height, width, settings, projection }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null }) => {
     if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log data to see trend</p>
@@ -754,36 +691,10 @@ export default function App() {
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     // --- SCALING CALCULATIONS ---
-    // Calculate tunnel tolerance based on mode
-    const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
-    
-    // Collect all values including tunnel boundaries for proper scaling
     const validValues = data.flatMap(d => {
         const vals = [];
         if (d.actual !== null) vals.push(d.actual);
         if (d.trend !== null) vals.push(d.trend);
-        
-        // Include tunnel boundaries if projection exists
-        if (projection && settings) {
-            const msPerDay = 86400000;
-            let idealY = 0;
-            
-            if (mode === 'weekly') {
-                // Calculate week difference mathematically
-                const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-                const diffWeeks = Math.round(diffDays / 7);
-                idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
-            } else {
-                // Daily mode: Use exact linear time
-                const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-                idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-            }
-            
-            // Include tunnel boundaries (± tolerance)
-            vals.push(idealY + tunnelTolerance);
-            vals.push(idealY - tunnelTolerance);
-        }
-        
         return vals;
     });
     
@@ -830,29 +741,10 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
-    // --- CREATE WEEK DELTA MAP FOR DAILY MODE ---
-    const weekDeltaMap = useMemo(() => {
-        if (mode !== 'daily' || !settings) return new Map<string, number>();
-        const map = new Map<string, number>();
-        // Create a map from week key to delta
-        const weekKeyToDelta = new Map<string, number>();
-        weeklyData.forEach(week => {
-            weekKeyToDelta.set(week.weekId, week.delta);
-        });
-        // Map each day in the data to its week's delta
-        data.forEach(point => {
-            const weekKey = getWeekKey(point.label);
-            const delta = weekKeyToDelta.get(weekKey);
-            if (delta !== undefined) {
-                map.set(point.label, delta);
-            }
-        });
-        return map;
-    }, [mode, weeklyData, settings, data]);
-
     // --- GRADIENT LOGIC (Smooth RGB Interpolation) ---
     const stops = useMemo(() => {
-        if (data.length < 2 || !settings) return [];
+        if (data.length < 2 || mode === 'daily') return [];
+        if (!settings) return [];
         
         const stopList: React.ReactElement[] = [];
 
@@ -861,24 +753,10 @@ export default function App() {
             const prev = data[i-1];
             if (prev.trend === null) return;
             
-            let diff: number;
-            
-            if (mode === 'weekly') {
-                // Calculate Slope for this segment (weekly mode)
-                const currentSlope = point.trend - prev.trend;
-                const targetSlope = settings.weeklyRate; 
-                diff = Math.abs(currentSlope - targetSlope);
-            } else {
-                // Daily mode: use the week's delta for this day
-                const dayDate = point.label;
-                const weekDelta = weekDeltaMap.get(dayDate);
-                if (weekDelta === undefined) {
-                    // If day doesn't have a week delta, skip
-                    return;
-                }
-                const targetSlope = settings.weeklyRate;
-                diff = Math.abs(weekDelta - targetSlope);
-            }
+            // Calculate Slope for this segment
+            const currentSlope = point.trend - prev.trend;
+            const targetSlope = settings.weeklyRate; 
+            const diff = Math.abs(currentSlope - targetSlope);
             
             const color = interpolateColor(diff);
             const offset = (i / denominator) * 100;
@@ -891,7 +769,14 @@ export default function App() {
         });
         
         return stopList;
-    }, [data, settings, mode, denominator, weekDeltaMap]);
+    }, [data, settings, mode, denominator]);
+
+    // --- WEEKLY ANCHOR LOOKUP ---
+    const weeklyAnchorIndex = useMemo(() => {
+        if (mode !== 'weekly' || !projection) return 0;
+        const idx = data.findIndex(d => d.dateObj.toDateString() === projection.anchorDate.toDateString());
+        return idx >= 0 ? idx : 0;
+    }, [data, mode, projection]);
 
     // --- TREND LINE PATH ---
     let trendPath = '';
@@ -913,6 +798,7 @@ export default function App() {
     
     if (projection && data.length > 0) {
         const msPerDay = 86400000;
+        const tunnelTolerance = mode === 'weekly' ? 0.3 : 0.8;
         
         // Arrays to store polygon points for tunnel
         const upperPoints: [number, number][] = [];
@@ -922,12 +808,12 @@ export default function App() {
              let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
 
-            // --- PROJECTION LOGIC ---
+            // --- SNAP LOGIC FOR WEEKLY VIEW ---
              if (mode === 'weekly') {
-                // Use mathematical week difference to ensure accuracy even with filtered data
-                // This handles cases where the anchor point might be off-screen
-                const diffWeeks = Math.round(diffDays / 7);
-                idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
+                // Align steps strictly by rendered week index to preserve constant slope
+                const anchorIdx = projection.anchorIndex ?? weeklyAnchorIndex;
+                const diffWeeks = i - anchorIdx;
+                 idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
              } else {
                  // Daily mode: Use exact linear time
                  idealY = projection.anchorVal + (diffDays * projection.dailySlope);
@@ -979,7 +865,7 @@ export default function App() {
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
           <defs>
-             {stops.length > 0 && (
+             {mode === 'weekly' && stops.length > 0 && (
                  <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
                     {stops}
                  </linearGradient>
@@ -1024,7 +910,7 @@ export default function App() {
              <path 
                 d={trendPath} 
                 fill="none" 
-                stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"} 
+                stroke={mode === 'weekly' ? "url(#trendGradient)" : "#10b981"} 
                 strokeWidth={expanded ? "3" : "2"} 
                 strokeLinecap="round" 
                 strokeLinejoin="round" 
@@ -1125,6 +1011,15 @@ export default function App() {
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
         <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
         <div className="flex gap-2">
+            {view === 'dashboard' && (
+                <button 
+                    onClick={handleExport}
+                    className="p-2 hover:bg-slate-800 rounded-full transition-colors text-slate-400"
+                    title="Export data"
+                >
+                    <Download size={20} />
+                </button>
+            )}
             <button 
                 onClick={() => handleNavigation(view === 'settings' ? 'dashboard' : 'settings')} 
                 className="p-2 hover:bg-slate-800 rounded-full transition-colors"
@@ -1159,16 +1054,16 @@ export default function App() {
                     </div>
                 </div>
 
-                {advice && (
-                    <div className={`px-4 py-3 rounded-xl border flex items-start gap-3 ${advice.color} relative`}>
-                        <Utensils size={18} className="shrink-0 mt-0.5" />
+                {showAdvice && (
+                    <div className={`px-4 py-3 rounded-xl border flex items-center gap-3 ${advice.color}`}>
+                        <Utensils size={18} className="shrink-0" />
                         <span className="text-sm font-semibold flex-1">{advice.text}</span>
-                        <button
-                            onClick={handleDismissAdvice}
-                            className="shrink-0 p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                            aria-label="Dismiss advice"
+                        <button 
+                            onClick={() => setDismissedAdvice(true)}
+                            className="shrink-0 w-6 h-6 rounded-full border border-current/30 flex items-center justify-center hover:bg-current/10 transition-colors"
+                            aria-label="Dismiss"
                         >
-                            <Check size={16} className="opacity-70 hover:opacity-100" />
+                            <X size={14} />
                         </button>
                     </div>
                 )}
@@ -1201,7 +1096,7 @@ export default function App() {
                         </div>
                     </div>
 
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} weeklyData={weeklyData} />
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} />
                     
                     <div 
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
@@ -1281,21 +1176,14 @@ export default function App() {
                                 </div>
                                 <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
                                 </div>
-                                {isExpanded && (() => {
-                                    const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
-                                    return (
+                                {isExpanded && (
                                 <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                                    <div className="flex flex-col gap-2 mb-2">
-                                        <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
-                                            <span>Daily Entries</span>
-                                            <span className={trendStatus.color}>{trendStatus.text}</span>
-                                        </div>
-                                        <div className="text-[10px] text-slate-400">
-                                            {trendStatus.advice}
-                                        </div>
+                                    <div className="flex justify-between text-[10px] text-slate-500 mb-2 uppercase font-bold">
+                                        <span>Daily Entries</span>
+                                        <span className={item.inTunnel ? "text-emerald-500" : "text-rose-500"}>{item.inTunnel ? 'Trend: On Track' : 'Trend: Deviated'}</span>
                                     </div>
                                     <div className="space-y-2">
-                                    {item.entries.slice().reverse().map((entry) => (
+                                    {item.entries.map((entry) => (
                                         <div key={entry.id} className="flex justify-between items-center text-sm">
                                         <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
                                         <div className="flex items-center gap-3">
@@ -1306,8 +1194,7 @@ export default function App() {
                                     ))}
                                     </div>
                                 </div>
-                                    );
-                                })()}
+                                )}
                             </div>
                             );
                         })}
