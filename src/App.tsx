@@ -37,8 +37,7 @@ import {
   Check,
   MessageSquare,
   X,
-  SkipForward,
-  Flame // Added icon for TDEE
+  SkipForward
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -80,7 +79,7 @@ interface WeightEntry {
 
 interface SettingsData {
   weeklyRate: number;
-  dailyCalories?: number; // New field for TDEE calc
+  dailyCalories?: number; 
   updatedAt: any;
 }
 
@@ -200,7 +199,7 @@ export default function App() {
   const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87');
-  const [dailyCalories, setDailyCalories] = useState(''); // New State
+  const [dailyCalories, setDailyCalories] = useState('');
 
   // Chart State
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
@@ -391,22 +390,6 @@ export default function App() {
 
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
-
-  // --- TDEE CALCULATION ---
-  const currentTDEE = useMemo(() => {
-      if (!settings || !settings.dailyCalories) return null;
-      // Current Rate is Kg/Week. 
-      // Convert to Kg/Day
-      const dailyRate = currentTrendRate / 7;
-      // Convert Kg/Day to Kcal/Day (approx 7700 kcal per kg)
-      const calorieSurplus = dailyRate * 7700;
-      
-      // TDEE = Intake - Surplus
-      // If gaining weight (Surplus > 0), TDEE is less than Intake.
-      // Wait, formula: Energy Balance = Intake - Expenditure
-      // Surplus = Intake - TDEE  =>  TDEE = Intake - Surplus
-      return Math.round(settings.dailyCalories - calorieSurplus);
-  }, [currentTrendRate, settings]);
 
 
   // --- PROJECTION DATA ---
@@ -649,22 +632,22 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
+  // --- ADVICE LOGIC (Dynamic Calories) ---
   const getWeekTrendStatus = (delta: number) => {
     if (!settings) return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500' };
-    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
-    let status: 'ok' | 'slow' | 'fast' = 'ok';
-    let action: 'none' | 'add' | 'remove' = 'none';
+    const targetRate = settings.weeklyRate;
     
-    if (goalType === 'gain') {
-        if (delta < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
-        else if (delta > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
-    } else {
-        const targetSigned = -targetAbs;
-        if (delta > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (delta < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
-    }
+    // Calculate required adjustment in Calories
+    // 1 kg weight = 7700 kcal
+    // Delta is change over 1 week (7 days)
+    // Daily surplus/deficit = (Rate / 7) * 7700
+    // Difference needed = (TargetRate - CurrentRate) / 7 * 7700
+    const diffRate = targetRate - delta;
+    const kcalAdjustment = Math.round((diffRate / 7) * 7700);
+    const absKcal = Math.abs(kcalAdjustment);
 
-    if (status === 'ok') {
+    // If deviation is small (< 100 kcal), say On Track
+    if (absKcal < 100) {
         return { 
             status: 'ok', 
             text: 'Trend: On Track', 
@@ -672,59 +655,56 @@ export default function App() {
             advice: 'On track. Maintain current calories.'
         };
     }
-    
-    if (action === 'add') {
-        const adviceText = goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.';
+
+    // Round to nearest 10 for cleaner numbers
+    const displayKcal = Math.round(absKcal / 10) * 10;
+
+    if (kcalAdjustment > 0) {
+        // Need to add calories (Growing too slow or Losing too fast)
         return { 
             status: 'slow', 
             text: 'Trend: Stalling', 
             color: 'text-amber-500',
-            advice: adviceText
+            advice: `Add ~${displayKcal} kcal/day.`
         };
-    }
-    
-    if (action === 'remove') {
-        const adviceText = goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.';
+    } else {
+        // Need to remove calories (Growing too fast or Stalling on weight loss)
         return { 
             status: 'fast', 
             text: 'Trend: Deviated', 
             color: 'text-rose-500',
-            advice: adviceText
+            advice: `Remove ~${displayKcal} kcal/day.`
         };
     }
-    
-    return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
   };
 
   const getAdvice = () => {
     if (!settings) return null;
-    const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
-    const rate = currentTrendRate;
-    let status: 'ok' | 'slow' | 'fast' = 'ok';
-    let action: 'none' | 'add' | 'remove' = 'none';
-    
-    if (goalType === 'gain') {
-        if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
-        else if (rate > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
-    } else {
-        const targetSigned = -targetAbs;
-        if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
+    const targetRate = parseFloat(settings.weeklyRate.toString());
+    const currentRate = currentTrendRate;
+
+    const diffRate = targetRate - currentRate;
+    const kcalAdjustment = Math.round((diffRate / 7) * 7700);
+    const absKcal = Math.abs(kcalAdjustment);
+
+    // Threshold: Only suggest change if off by more than 100 kcal/day
+    if (absKcal < 100) {
+        return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
     }
 
-    if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
-    
-    if (action === 'add') return { 
-        color: 'bg-amber-500/10 border-amber-500/20 text-amber-200', 
-        text: goalType === 'gain' ? 'Stalling. Add ~250 kcal/day.' : 'Losing too fast. Add ~200 kcal/day.' 
-    };
-    
-    if (action === 'remove') return { 
-        color: 'bg-rose-500/10 border-rose-500/20 text-rose-200', 
-        text: goalType === 'gain' ? 'Gaining too fast. Remove ~200 kcal/day.' : 'Stalling. Remove ~250 kcal/day.' 
-    };
-    
-    return null;
+    const displayKcal = Math.round(absKcal / 10) * 10;
+
+    if (kcalAdjustment > 0) {
+        return { 
+            color: 'bg-amber-500/10 border-amber-500/20 text-amber-200', 
+            text: `Stalling. Add ~${displayKcal} kcal/day.` 
+        };
+    } else {
+        return { 
+            color: 'bg-rose-500/10 border-rose-500/20 text-rose-200', 
+            text: `Deviated. Remove ~${displayKcal} kcal/day.` 
+        };
+    }
   };
 
   const baseAdvice = getAdvice();
@@ -1199,22 +1179,6 @@ export default function App() {
                     </div>
                 </div>
 
-                {/* TDEE CARD - Show only if Daily Calories are set */}
-                {currentTDEE !== null && (
-                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800 flex items-center justify-between">
-                        <div>
-                            <p className="text-slate-400 text-xs font-medium uppercase mb-1">Est. TDEE</p>
-                            <p className="text-xl font-bold text-white flex items-center gap-2">
-                                <Flame size={18} className="text-orange-500" />
-                                {currentTDEE} <span className="text-sm font-normal text-slate-500">kcal</span>
-                            </p>
-                        </div>
-                        <div className="text-right text-xs text-slate-500">
-                            Based on {settings?.dailyCalories} daily intake
-                        </div>
-                    </div>
-                )}
-
                 {/* ADVICE SECTION - REPLACED BY PROMPT IF SUNDAY & NO WEIGHT */}
                 {showPreWeightPrompt && (
                     <div className="px-4 py-3 rounded-xl border flex items-center gap-3 bg-blue-500/10 border-blue-500/20 text-blue-200 relative">
@@ -1483,7 +1447,7 @@ export default function App() {
                             placeholder="e.g. 2500"
                         />
                         <p className="text-[10px] text-slate-500 mt-2">
-                            Used to estimate your TDEE. Leave blank if unknown.
+                            Used to calculate caloric adjustment advice. Leave blank if unknown.
                         </p>
                     </div>
 
