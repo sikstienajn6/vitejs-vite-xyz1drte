@@ -37,7 +37,8 @@ import {
   Check,
   MessageSquare,
   X,
-  SkipForward
+  SkipForward,
+  Flame // Added icon for TDEE
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -79,6 +80,7 @@ interface WeightEntry {
 
 interface SettingsData {
   weeklyRate: number;
+  dailyCalories?: number; // New field for TDEE calc
   updatedAt: any;
 }
 
@@ -125,7 +127,6 @@ const getWeekKey = (date: string) => {
 const getLastSundayWeekKey = () => {
   const today = new Date();
   const dayOfWeek = today.getDay();
-  // Get the most recent Sunday
   const daysSinceSunday = dayOfWeek === 0 ? 0 : dayOfWeek;
   const lastSunday = new Date(today);
   lastSunday.setDate(today.getDate() - daysSinceSunday);
@@ -140,7 +141,6 @@ const formatDate = (dateString: string) => {
 
 const formatTime = (timestamp: any) => {
     if (!timestamp) return '';
-    // Handle Firebase Timestamp or JS Date
     const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
@@ -160,21 +160,18 @@ const getMedian = (values: number[]) => {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 };
 
-// RGB Interpolation Helper
 const interpolateColor = (diff: number) => {
-    const cGreen = [16, 185, 129]; // Emerald 500
-    const cOrange = [251, 191, 36]; // Amber 400
-    const cRed = [239, 68, 68];     // Red 500
+    const cGreen = [16, 185, 129];
+    const cOrange = [251, 191, 36];
+    const cRed = [239, 68, 68];
 
     let color1, color2, t;
 
     if (diff <= 0.15) {
-        // Green to Orange
         color1 = cGreen;
         color2 = cOrange;
         t = diff / 0.15;
     } else {
-        // Orange to Red
         color1 = cOrange;
         color2 = cRed;
         t = Math.min(1, (diff - 0.15) / 0.15);
@@ -199,6 +196,12 @@ export default function App() {
   const [commentInput, setCommentInput] = useState('');
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
   
+  // Settings State
+  const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
+  const [weeklyRate, setWeeklyRate] = useState('0.2'); 
+  const [monthlyRate, setMonthlyRate] = useState('0.87');
+  const [dailyCalories, setDailyCalories] = useState(''); // New State
+
   // Chart State
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
@@ -213,9 +216,6 @@ export default function App() {
   const [containerWidth, setContainerWidth] = useState(0);
   
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
-  const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
-  const [weeklyRate, setWeeklyRate] = useState('0.2'); 
-  const [monthlyRate, setMonthlyRate] = useState('0.87');
   const [dismissedAdviceWeeks, setDismissedAdviceWeeks] = useState<string[]>([]); 
   const [adviceSkippedToday, setAdviceSkippedToday] = useState(false);
 
@@ -286,6 +286,7 @@ export default function App() {
         setGoalType(isNegative ? 'lose' : 'gain');
         setWeeklyRate(absRate.toString());
         setMonthlyRate((absRate * 4.345).toFixed(2));
+        setDailyCalories(s.dailyCalories ? s.dailyCalories.toString() : '');
       } else {
         setSettings(null);
         setView('settings'); 
@@ -351,7 +352,6 @@ export default function App() {
       const rawAvg = valSum / entries.length;
       const median = getMedian(entries.map(e => e.weight));
 
-      // Use EMA average (trend) for the week's "actual"
       const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) ?? e.weight), 0);
       const trendAvg = trendSum / entries.length;
 
@@ -372,7 +372,6 @@ export default function App() {
       } as WeeklySummary;
     });
 
-    // Assign targets so each week is centred on previous week's EMA + rate
     for (let i = 0; i < processedWeeks.length; i++) {
       if (i === 0) {
         processedWeeks[i].target = processedWeeks[i].actual;
@@ -393,8 +392,24 @@ export default function App() {
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
 
+  // --- TDEE CALCULATION ---
+  const currentTDEE = useMemo(() => {
+      if (!settings || !settings.dailyCalories) return null;
+      // Current Rate is Kg/Week. 
+      // Convert to Kg/Day
+      const dailyRate = currentTrendRate / 7;
+      // Convert Kg/Day to Kcal/Day (approx 7700 kcal per kg)
+      const calorieSurplus = dailyRate * 7700;
+      
+      // TDEE = Intake - Surplus
+      // If gaining weight (Surplus > 0), TDEE is less than Intake.
+      // Wait, formula: Energy Balance = Intake - Expenditure
+      // Surplus = Intake - TDEE  =>  TDEE = Intake - Surplus
+      return Math.round(settings.dailyCalories - calorieSurplus);
+  }, [currentTrendRate, settings]);
 
-  // --- PROJECTION DATA (The "Green Line" logic) ---
+
+  // --- PROJECTION DATA ---
   const projectionData = useMemo<ProjectionData | null>(() => {
     if (!settings || weights.length === 0) return null;
     const rate = parseFloat(settings.weeklyRate.toString()) || 0;
@@ -412,7 +427,6 @@ export default function App() {
             weeklySlope: rate
         };
     } else {
-        // Weekly: Anchor is the "Next to Last" week's trend
         const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
         const anchorWeek = weeklyData[anchorIndex];
         const anchorDate = new Date(anchorWeek.entries[0].date); 
@@ -510,6 +524,7 @@ export default function App() {
        setGoalType(isNegative ? 'lose' : 'gain');
        setWeeklyRate(absRate.toString());
        setMonthlyRate((absRate * 4.345).toFixed(2));
+       setDailyCalories(settings.dailyCalories ? settings.dailyCalories.toString() : '');
      }
   };
 
@@ -561,9 +576,12 @@ export default function App() {
       if (goalType === 'lose') rate = -Math.abs(rate);
       else rate = Math.abs(rate);
 
+      const cals = dailyCalories ? parseInt(dailyCalories) : 0;
+
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
         weeklyRate: rate,
+        dailyCalories: cals,
         updatedAt: serverTimestamp()
       });
       setView('dashboard');
@@ -631,14 +649,12 @@ export default function App() {
     return 'text-rose-400'; 
   };
 
-  // --- ADVICE LOGIC ---
   const getWeekTrendStatus = (delta: number) => {
     if (!settings) return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500' };
     const targetAbs = Math.abs(parseFloat(settings.weeklyRate.toString()));
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
     
-    // Tightened thresholds (0.1 tolerance)
     if (goalType === 'gain') {
         if (delta < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
         else if (delta > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
@@ -713,30 +729,24 @@ export default function App() {
 
   const baseAdvice = getAdvice();
   
-  // --- ADVICE DISPLAY LOGIC (Sunday-only with dismiss & Pre-weight prompt) ---
   const { showAdvice, showPreWeightPrompt } = useMemo(() => {
-    // Default returns
     const res = { showAdvice: false, showPreWeightPrompt: false };
     
     if (!baseAdvice || !settings || weeklyData.length === 0) return res;
     if (weeklyData.length < 1) return res;
 
-    // Check if it is Sunday
     const today = new Date();
     const isSunday = today.getDay() === 0;
     
-    // Check if we have a weight for today (using local date string)
     const todayStr = today.toISOString().split('T')[0];
     const hasWeightToday = weights.some(w => w.date === todayStr);
 
     if (isSunday) {
         if (!hasWeightToday && !adviceSkippedToday) {
-            // It is Sunday, no weight yet, and user hasn't skipped -> Show Prompt
             return { showAdvice: false, showPreWeightPrompt: true };
         }
     }
 
-    // Logic for showing actual advice (same as before)
     const lastSundayWeekKey = getLastSundayWeekKey();
     if (dismissedAdviceWeeks.includes(lastSundayWeekKey)) return res;
     
@@ -749,7 +759,6 @@ export default function App() {
   
   const advice = showAdvice ? baseAdvice : null;
   
-  // Handler to dismiss advice
   const handleDismissAdvice = async () => {
     if (!user) return;
     const lastSundayWeekKey = getLastSundayWeekKey();
@@ -766,7 +775,6 @@ export default function App() {
     }
   };
 
-  // --- DRAG & SNAP LOGIC ---
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
@@ -820,22 +828,18 @@ export default function App() {
   };
 
   const handlePointClick = (point: ChartPoint) => {
-      // Find the specific entry or create a dummy one for weekly view
       if (chartMode === 'daily') {
           const entry = weights.find(w => w.date === point.label);
           if (entry) {
               setSelectedEntry(entry);
           }
       } else {
-          // Weekly Mode
-          // Create a "Dummy" Entry to display in the modal
-          // id is fake, weight is average, date is week label
           if (point.actual !== null) {
               setSelectedEntry({
                   id: 'weekly-summary-' + point.label,
                   weight: point.actual,
-                  date: point.weekLabel || point.label, // Display label (e.g. "Jan 5") as date
-                  createdAt: null // No timestamp for weekly summary
+                  date: point.weekLabel || point.label, 
+                  createdAt: null
               });
           }
       }
@@ -851,11 +855,8 @@ export default function App() {
     
     const renderWidth = width > 0 ? width : 100;
     const expanded = height > SNAP_THRESHOLD;
-    
-    // Padding
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
-    // --- SCALING CALCULATIONS ---
     const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
     
     const validValues = data.flatMap<number>(d => {
@@ -904,7 +905,6 @@ export default function App() {
     const axisLineY = height - padding.bottom;
     const clampToAxis = (val: number) => Math.min(val, axisLineY);
 
-    // --- GRID LINES ---
     const gridCount = 5;
     const computeNiceStep = (targetStep: number) => {
         if (targetStep <= 0) return 0.1;
@@ -926,14 +926,11 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
-    // --- MIDPOINT GRADIENT LOGIC (Segment-based Coloring) ---
     const stops = useMemo(() => {
         if (data.length < 2 || !settings) return [];
         
         const stopList: React.ReactElement[] = [];
 
-        // Loop through segments (i = start point of segment i)
-        // Segment i connects data[i] to data[i+1]
         for (let i = 0; i < data.length - 1; i++) {
              const startPoint = data[i];
              const endPoint = data[i+1];
@@ -942,7 +939,6 @@ export default function App() {
              
              let diff: number;
              
-             // Calculate Slope for THIS segment
              if (mode === 'weekly') {
                 const currentSlope = endPoint.trend - startPoint.trend;
                 const targetSlope = settings.weeklyRate; 
@@ -955,20 +951,15 @@ export default function App() {
              
              const color = interpolateColor(diff);
              
-             // Calculate Offset of the MIDPOINT of this segment
-             // i + 0.5 represents the center of the segment between i and i+1
              const offsetVal = (i + 0.5) / denominator; 
              const offsetPercent = offsetVal * 100;
              
-             // If this is the first segment, add a start anchor at 0%
              if (stopList.length === 0) {
                  stopList.push(<stop key="start" offset="0%" stopColor={color} />);
              }
              
-             // Add the midpoint stop
              stopList.push(<stop key={`mid-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
              
-             // If this is the last segment, add an end anchor at 100%
              if (i === data.length - 2) {
                  stopList.push(<stop key="end" offset="100%" stopColor={color} />);
              }
@@ -977,7 +968,6 @@ export default function App() {
         return stopList;
     }, [data, settings, mode, denominator]);
 
-    // --- TREND LINE PATH ---
     let trendPath = '';
     if (count > 1) {
         let lastValidT = -1;
@@ -991,7 +981,6 @@ export default function App() {
         });
     }
 
-    // --- PROJECTION & TUNNEL PATHS ---
     let projectionPath = '';
     let tunnelPath = '';
     
@@ -1036,7 +1025,6 @@ export default function App() {
         }
     }
 
-    // --- SMART AXIS LOGIC ---
     const minLabelSpacing = 35; 
     let lastRenderedX = -999;
     const lastPointX = getX(data.length - 1);
@@ -1082,7 +1070,6 @@ export default function App() {
              <path 
                d={trendPath} 
                fill="none" 
-               // Always use gradient now
                stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"} 
                strokeWidth={expanded ? "3" : "2"} 
                strokeLinecap="round" 
@@ -1098,9 +1085,7 @@ export default function App() {
              
              return (
                 <g key={i} onClick={() => handlePointClick(d)} className="cursor-pointer">
-                    {/* Transparent Hit Area */}
                     <circle cx={px} cy={py} r={10} fill="transparent" />
-                    {/* Visible Point - Change fill to Emerald (#10b981) */}
                     <circle 
                         cx={px} 
                         cy={py} 
@@ -1213,6 +1198,22 @@ export default function App() {
                         </div>
                     </div>
                 </div>
+
+                {/* TDEE CARD - Show only if Daily Calories are set */}
+                {currentTDEE !== null && (
+                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800 flex items-center justify-between">
+                        <div>
+                            <p className="text-slate-400 text-xs font-medium uppercase mb-1">Est. TDEE</p>
+                            <p className="text-xl font-bold text-white flex items-center gap-2">
+                                <Flame size={18} className="text-orange-500" />
+                                {currentTDEE} <span className="text-sm font-normal text-slate-500">kcal</span>
+                            </p>
+                        </div>
+                        <div className="text-right text-xs text-slate-500">
+                            Based on {settings?.dailyCalories} daily intake
+                        </div>
+                    </div>
+                )}
 
                 {/* ADVICE SECTION - REPLACED BY PROMPT IF SUNDAY & NO WEIGHT */}
                 {showPreWeightPrompt && (
@@ -1472,6 +1473,20 @@ export default function App() {
                         />
                     </div>
 
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Avg. Daily Intake (kcal)</label>
+                        <input 
+                            type="text" inputMode="numeric" 
+                            value={dailyCalories} 
+                            onChange={(e) => setDailyCalories(e.target.value)}
+                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
+                            placeholder="e.g. 2500"
+                        />
+                        <p className="text-[10px] text-slate-500 mt-2">
+                            Used to estimate your TDEE. Leave blank if unknown.
+                        </p>
+                    </div>
+
                     <div className="pt-4 mt-auto">
                         <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
                             Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
@@ -1559,7 +1574,7 @@ export default function App() {
                           onClick={handleDeleteEntry}
                           className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
                       >
-                          Yes, delete
+                          Yes, Delete
                       </button>
                   </div>
               </div>
