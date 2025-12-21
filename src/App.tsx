@@ -913,23 +913,6 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
-    const weekDeltaMap = useMemo(() => {
-        if (mode !== 'daily' || !settings) return new Map<string, number>();
-        const map = new Map<string, number>();
-        const weekKeyToDelta = new Map<string, number>();
-        weeklyData.forEach(week => {
-            weekKeyToDelta.set(week.weekId, week.delta);
-        });
-        data.forEach(point => {
-            const weekKey = getWeekKey(point.label);
-            const delta = weekKeyToDelta.get(weekKey);
-            if (delta !== undefined) {
-                map.set(point.label, delta);
-            }
-        });
-        return map;
-    }, [mode, weeklyData, settings, data]);
-
     // --- GRADIENT LOGIC (Only for Weekly View now) ---
     const stops = useMemo(() => {
         // If daily mode, we don't use gradient
