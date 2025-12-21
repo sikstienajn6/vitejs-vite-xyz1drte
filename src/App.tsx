@@ -829,7 +829,7 @@ export default function App() {
   };
 
   // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height, width, settings, projection, weeklyData }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null, weeklyData: WeeklySummary[] }) => {
+  const ChartRenderer = ({ data, mode, height, width, settings, projection }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null }) => {
     if (!data || data.length === 0) return (
       <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
         <p className="text-sm">Log data to see trend</p>
@@ -1239,7 +1239,7 @@ export default function App() {
                         </div>
                     </div>
 
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} weeklyData={weeklyData} />
+                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} />
                     
                     <div 
                         className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
@@ -1510,13 +1510,13 @@ export default function App() {
                           onClick={() => setDeleteConfirmationId(null)}
                           className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
                       >
-                          No, keep
+                          No, Keep
                       </button>
                       <button 
                           onClick={handleDeleteEntry}
                           className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
                       >
-                          Yes, delete
+                          Yes, Delete
                       </button>
                   </div>
               </div>
