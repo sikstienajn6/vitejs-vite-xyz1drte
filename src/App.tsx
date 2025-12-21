@@ -1510,13 +1510,13 @@ export default function App() {
                           onClick={() => setDeleteConfirmationId(null)}
                           className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
                       >
-                          No, Keep
+                          No, keep
                       </button>
                       <button 
                           onClick={handleDeleteEntry}
                           className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
                       >
-                          Yes, Delete
+                          Yes, delete
                       </button>
                   </div>
               </div>
