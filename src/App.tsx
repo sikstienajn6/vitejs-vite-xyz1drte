@@ -1534,7 +1534,7 @@ export default function App() {
       {deleteConfirmationId && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-                  <h3 className="text-lg font-bold text-white mb-2">Delete Entry?</h3>
+                  <h3 className="text-lg font-bold text-white mb-2">Delete entry?</h3>
                   <p className="text-slate-400 text-sm mb-6">Are you sure you want to delete this weight log? This action cannot be undone.</p>
                   <div className="flex gap-3">
                       <button 
