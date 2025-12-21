@@ -1547,7 +1547,7 @@ export default function App() {
                           onClick={handleDeleteEntry}
                           className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
                       >
-                          Yes, Delete
+                          Yes, delete
                       </button>
                   </div>
               </div>
