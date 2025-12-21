@@ -638,13 +638,14 @@ export default function App() {
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
     
+    // Tightened thresholds to match RATE_TOLERANCE_GREEN (0.1)
     if (goalType === 'gain') {
         if (delta < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
-        else if (delta > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
+        else if (delta > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
     } else {
         const targetSigned = -targetAbs;
         if (delta > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (delta < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
+        else if (delta < targetSigned - 0.1) { status = 'fast'; action = 'add'; }
     }
 
     if (status === 'ok') {
@@ -686,13 +687,14 @@ export default function App() {
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
     
+    // Tightened thresholds for advice too
     if (goalType === 'gain') {
         if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
-        else if (rate > targetAbs + 0.15) { status = 'fast'; action = 'remove'; }
+        else if (rate > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
     } else {
         const targetSigned = -targetAbs;
         if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
+        else if (rate < targetSigned - 0.1) { status = 'fast'; action = 'add'; }
     }
 
     if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
@@ -819,11 +821,23 @@ export default function App() {
   };
 
   const handlePointClick = (point: ChartPoint) => {
-      // Find the specific entry
+      // Find the specific entry or create a dummy one for weekly view
       if (chartMode === 'daily') {
           const entry = weights.find(w => w.date === point.label);
           if (entry) {
               setSelectedEntry(entry);
+          }
+      } else {
+          // Weekly Mode
+          // Create a "Dummy" Entry to display in the modal
+          // id is fake, weight is average, date is week label
+          if (point.actual !== null) {
+              setSelectedEntry({
+                  id: 'weekly-summary-' + point.label,
+                  weight: point.actual,
+                  date: point.weekLabel || point.label, // Display label (e.g. "Jan 5") as date
+                  createdAt: null // No timestamp for weekly summary
+              });
           }
       }
   };
@@ -913,10 +927,8 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
-    // --- GRADIENT LOGIC (Only for Weekly View now) ---
+    // --- GRADIENT LOGIC (Both Weekly and Daily) ---
     const stops = useMemo(() => {
-        // If daily mode, we don't use gradient
-        if (mode === 'daily') return [];
         if (data.length < 2 || !settings) return [];
         
         const stopList: React.ReactElement[] = [];
@@ -928,10 +940,17 @@ export default function App() {
             
             let diff: number;
             
-            // Weekly logic
-            const currentSlope = point.trend - prev.trend;
-            const targetSlope = settings.weeklyRate; 
-            diff = Math.abs(currentSlope - targetSlope);
+            if (mode === 'weekly') {
+                // Weekly logic: Slope between weeks compared to weekly rate
+                const currentSlope = point.trend - prev.trend;
+                const targetSlope = settings.weeklyRate; 
+                diff = Math.abs(currentSlope - targetSlope);
+            } else {
+                // Daily logic: Slope between days, multiplied by 7 to get "Weekly Equivalent", compared to weekly rate
+                const dailySlope = point.trend - prev.trend;
+                const weeklyEquivalentSlope = dailySlope * 7;
+                diff = Math.abs(weeklyEquivalentSlope - settings.weeklyRate);
+            }
             
             const color = interpolateColor(diff);
             const offset = (i / denominator) * 100;
@@ -1018,7 +1037,7 @@ export default function App() {
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
           <defs>
-              {mode === 'weekly' && stops.length > 0 && (
+              {stops.length > 0 && (
                   <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
                      {stops}
                   </linearGradient>
@@ -1051,8 +1070,8 @@ export default function App() {
              <path 
                d={trendPath} 
                fill="none" 
-               // Change line color in daily mode to Blue 600 (#2563eb)
-               stroke={mode === 'weekly' ? (stops.length > 0 ? "url(#trendGradient)" : "#10b981") : "#2563eb"} 
+               // Always use gradient now
+               stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"} 
                strokeWidth={expanded ? "3" : "2"} 
                strokeLinecap="round" 
                strokeLinejoin="round" 
@@ -1247,7 +1266,7 @@ export default function App() {
                     >
                         <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-5/6 mx-auto">
                             <div className="flex items-center justify-center gap-1">
-                                <div className="w-3 h-0.5 bg-blue-600"></div>Trend
+                                <div className="w-3 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500 rounded-full"></div>Trend
                             </div>
                             <div className="flex items-center justify-center gap-1">
                                 <div className="w-3 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
@@ -1463,35 +1482,47 @@ export default function App() {
                   
                   <div className="flex flex-col gap-4">
                       <div className="text-center border-b border-slate-800 pb-4">
-                          <h3 className="text-3xl font-bold text-white mb-1">{selectedEntry.weight} <span className="text-lg text-slate-500 font-normal">kg</span></h3>
+                          <h3 className="text-3xl font-bold text-white mb-1">{selectedEntry.weight.toFixed(1)} <span className="text-lg text-slate-500 font-normal">kg</span></h3>
                           <p className="text-slate-400 font-medium flex items-center justify-center gap-2">
-                              {formatDate(selectedEntry.date)}
+                              {/* If weekly dummy entry, date is just the string label */}
+                              {selectedEntry.id.startsWith('weekly') ? selectedEntry.date : formatDate(selectedEntry.date)}
                           </p>
                       </div>
                       
-                      <div className="grid grid-cols-2 gap-4">
-                           <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                               <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
-                               <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                                   <Clock size={14} className="text-blue-500" />
-                                   {formatTime(selectedEntry.createdAt) || '--:--'}
-                               </p>
-                           </div>
-                           <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                               <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Date</p>
-                               <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                                   <Calendar size={14} className="text-blue-500" />
-                                   {formatDate(selectedEntry.date)}
-                               </p>
-                           </div>
-                      </div>
+                      {/* Only show these details if it's NOT a weekly summary dummy entry */}
+                      {!selectedEntry.id.startsWith('weekly') && (
+                          <>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
+                                    <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                                        <Clock size={14} className="text-blue-500" />
+                                        {formatTime(selectedEntry.createdAt) || '--:--'}
+                                    </p>
+                                </div>
+                                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Date</p>
+                                    <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                                        <Calendar size={14} className="text-blue-500" />
+                                        {formatDate(selectedEntry.date)}
+                                    </p>
+                                </div>
+                            </div>
 
-                      {selectedEntry.comment && (
-                          <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
-                              <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
-                                  <MessageSquare size={12} /> Comment
-                              </p>
-                              <p className="text-sm text-slate-200 italic">"{selectedEntry.comment}"</p>
+                            {selectedEntry.comment && (
+                                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
+                                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
+                                        <MessageSquare size={12} /> Comment
+                                    </p>
+                                    <p className="text-sm text-slate-200 italic">"{selectedEntry.comment}"</p>
+                                </div>
+                            )}
+                          </>
+                      )}
+                      
+                      {selectedEntry.id.startsWith('weekly') && (
+                          <div className="text-center text-sm text-slate-500 italic">
+                              Weekly Average
                           </div>
                       )}
                   </div>
@@ -1510,7 +1541,7 @@ export default function App() {
                           onClick={() => setDeleteConfirmationId(null)}
                           className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
                       >
-                          No, Keep
+                          No, keep
                       </button>
                       <button 
                           onClick={handleDeleteEntry}
