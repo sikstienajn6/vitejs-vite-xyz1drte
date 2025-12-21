@@ -638,14 +638,14 @@ export default function App() {
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
     
-    // Tightened thresholds to match RATE_TOLERANCE_GREEN (0.1)
+    // Tightened thresholds (0.1 tolerance)
     if (goalType === 'gain') {
         if (delta < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
         else if (delta > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
     } else {
         const targetSigned = -targetAbs;
         if (delta > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (delta < targetSigned - 0.1) { status = 'fast'; action = 'add'; }
+        else if (delta < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
     }
 
     if (status === 'ok') {
@@ -687,14 +687,13 @@ export default function App() {
     let status: 'ok' | 'slow' | 'fast' = 'ok';
     let action: 'none' | 'add' | 'remove' = 'none';
     
-    // Tightened thresholds for advice too
     if (goalType === 'gain') {
         if (rate < targetAbs - 0.1) { status = 'slow'; action = 'add'; }
         else if (rate > targetAbs + 0.1) { status = 'fast'; action = 'remove'; }
     } else {
         const targetSigned = -targetAbs;
         if (rate > targetSigned + 0.1) { status = 'slow'; action = 'remove'; }
-        else if (rate < targetSigned - 0.1) { status = 'fast'; action = 'add'; }
+        else if (rate < targetSigned - 0.15) { status = 'fast'; action = 'add'; }
     }
 
     if (status === 'ok') return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
@@ -927,40 +926,53 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
-    // --- GRADIENT LOGIC (Both Weekly and Daily) ---
+    // --- MIDPOINT GRADIENT LOGIC (Segment-based Coloring) ---
     const stops = useMemo(() => {
         if (data.length < 2 || !settings) return [];
         
         const stopList: React.ReactElement[] = [];
 
-        data.forEach((point, i) => {
-            if (point.trend === null || i === 0) return;
-            const prev = data[i-1];
-            if (prev.trend === null) return;
-            
-            let diff: number;
-            
-            if (mode === 'weekly') {
-                // Weekly logic: Slope between weeks compared to weekly rate
-                const currentSlope = point.trend - prev.trend;
+        // Loop through segments (i = start point of segment i)
+        // Segment i connects data[i] to data[i+1]
+        for (let i = 0; i < data.length - 1; i++) {
+             const startPoint = data[i];
+             const endPoint = data[i+1];
+             
+             if (startPoint.trend === null || endPoint.trend === null) continue;
+             
+             let diff: number;
+             
+             // Calculate Slope for THIS segment
+             if (mode === 'weekly') {
+                const currentSlope = endPoint.trend - startPoint.trend;
                 const targetSlope = settings.weeklyRate; 
                 diff = Math.abs(currentSlope - targetSlope);
-            } else {
-                // Daily logic: Slope between days, multiplied by 7 to get "Weekly Equivalent", compared to weekly rate
-                const dailySlope = point.trend - prev.trend;
+             } else {
+                const dailySlope = endPoint.trend - startPoint.trend;
                 const weeklyEquivalentSlope = dailySlope * 7;
                 diff = Math.abs(weeklyEquivalentSlope - settings.weeklyRate);
-            }
-            
-            const color = interpolateColor(diff);
-            const offset = (i / denominator) * 100;
-            
-            if (stopList.length === 0) {
-                 stopList.push(<stop key={`start-${i}`} offset={`${((i-1)/denominator)*100}%`} stopColor={color} />);
-            }
-
-            stopList.push(<stop key={i} offset={`${offset}%`} stopColor={color} />);
-        });
+             }
+             
+             const color = interpolateColor(diff);
+             
+             // Calculate Offset of the MIDPOINT of this segment
+             // i + 0.5 represents the center of the segment between i and i+1
+             const offsetVal = (i + 0.5) / denominator; 
+             const offsetPercent = offsetVal * 100;
+             
+             // If this is the first segment, add a start anchor at 0%
+             if (stopList.length === 0) {
+                 stopList.push(<stop key="start" offset="0%" stopColor={color} />);
+             }
+             
+             // Add the midpoint stop
+             stopList.push(<stop key={`mid-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
+             
+             // If this is the last segment, add an end anchor at 100%
+             if (i === data.length - 2) {
+                 stopList.push(<stop key="end" offset="100%" stopColor={color} />);
+             }
+        }
         
         return stopList;
     }, [data, settings, mode, denominator]);
@@ -1547,7 +1559,7 @@ export default function App() {
                           onClick={handleDeleteEntry}
                           className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
                       >
-                          Yes, delete
+                          Yes, Delete
                       </button>
                   </div>
               </div>
