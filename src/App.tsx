@@ -34,7 +34,10 @@ import {
   LogIn,
   Info,
   Utensils,
-  Check
+  Check,
+  MessageSquare,
+  X,
+  SkipForward
 } from 'lucide-react';
 
 // --- CONFIGURATION ---
@@ -70,6 +73,7 @@ interface WeightEntry {
   id: string;
   weight: number;
   date: string;
+  comment?: string;
   createdAt: any;
 }
 
@@ -134,6 +138,13 @@ const formatDate = (dateString: string) => {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
+const formatTime = (timestamp: any) => {
+    if (!timestamp) return '';
+    // Handle Firebase Timestamp or JS Date
+    const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
 const getDaysArray = (start: Date, end: Date) => {
     const arr: string[] = [];
     for(let dt=new Date(start); dt<=end; dt.setDate(dt.getDate()+1)){
@@ -185,6 +196,7 @@ export default function App() {
   
   const [weightInput, setWeightInput] = useState('');
   const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
+  const [commentInput, setCommentInput] = useState('');
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
   
   // Chart State
@@ -205,6 +217,11 @@ export default function App() {
   const [weeklyRate, setWeeklyRate] = useState('0.2'); 
   const [monthlyRate, setMonthlyRate] = useState('0.87');
   const [dismissedAdviceWeeks, setDismissedAdviceWeeks] = useState<string[]>([]); 
+  const [adviceSkippedToday, setAdviceSkippedToday] = useState(false);
+
+  // Modal / Popup States
+  const [deleteConfirmationId, setDeleteConfirmationId] = useState<string | null>(null);
+  const [selectedEntry, setSelectedEntry] = useState<WeightEntry | null>(null);
 
   // --- AUTH ---
   useEffect(() => {
@@ -525,9 +542,11 @@ export default function App() {
       await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
         weight: sanitizedWeight,
         date: dateInput,
+        comment: commentInput,
         createdAt: serverTimestamp()
       });
       setWeightInput('');
+      setCommentInput('');
     } catch (err) {
       console.error("Error adding weight:", err);
       alert("Error saving.");
@@ -565,14 +584,15 @@ export default function App() {
       weekAgg.set(w.weekId, { avg: w.rawAvg, median: w.median });
     });
 
-    const header = ['date', 'weight', 'ema', 'week_id', 'week_median', 'week_average'];
+    const header = ['date', 'weight', 'comment', 'ema', 'week_id', 'week_median', 'week_average'];
     const rows = sorted.map(entry => {
       const weekId = getWeekKey(entry.date);
       const ema = trendMap.get(entry.date) ?? '';
       const agg = weekAgg.get(weekId);
       const median = agg?.median ?? '';
       const avg = agg?.avg ?? '';
-      return [entry.date, entry.weight, ema, weekId, median, avg].join(',');
+      const commentSafe = entry.comment ? `"${entry.comment.replace(/"/g, '""')}"` : '';
+      return [entry.date, entry.weight, commentSafe, ema, weekId, median, avg].join(',');
     });
 
     const csv = [header.join(','), ...rows].join('\n');
@@ -585,12 +605,12 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleDeleteEntry = async (id: string) => {
-    if (!confirm("Delete this entry?")) return;
-    if (!user) return;
+  const handleDeleteEntry = async () => {
+    if (!deleteConfirmationId || !user) return;
     try {
       // @ts-ignore
-      await deleteDoc(doc(db, 'users', user.uid, 'weights', id));
+      await deleteDoc(doc(db, 'users', user.uid, 'weights', deleteConfirmationId));
+      setDeleteConfirmationId(null);
     } catch (err) {
       console.error("Delete error", err);
     }
@@ -692,36 +712,41 @@ export default function App() {
 
   const baseAdvice = getAdvice();
   
-  // --- ADVICE DISPLAY LOGIC (Sunday-only with dismiss) ---
-  const shouldShowAdvice = useMemo(() => {
-    if (!baseAdvice || !settings || weeklyData.length === 0) return false;
+  // --- ADVICE DISPLAY LOGIC (Sunday-only with dismiss & Pre-weight prompt) ---
+  const { showAdvice, showPreWeightPrompt } = useMemo(() => {
+    // Default returns
+    const res = { showAdvice: false, showPreWeightPrompt: false };
     
-    // Need at least one complete week of data
-    if (weeklyData.length < 1) return false;
+    if (!baseAdvice || !settings || weeklyData.length === 0) return res;
+    if (weeklyData.length < 1) return res;
+
+    // Check if it is Sunday
+    const today = new Date();
+    const isSunday = today.getDay() === 0;
     
-    // Get the week key for the most recent Sunday
-    // Advice appears on Sunday for the week that just ended
+    // Check if we have a weight for today (using local date string)
+    const todayStr = today.toISOString().split('T')[0];
+    const hasWeightToday = weights.some(w => w.date === todayStr);
+
+    if (isSunday) {
+        if (!hasWeightToday && !adviceSkippedToday) {
+            // It is Sunday, no weight yet, and user hasn't skipped -> Show Prompt
+            return { showAdvice: false, showPreWeightPrompt: true };
+        }
+    }
+
+    // Logic for showing actual advice (same as before)
     const lastSundayWeekKey = getLastSundayWeekKey();
+    if (dismissedAdviceWeeks.includes(lastSundayWeekKey)) return res;
     
-    // Check if this week's advice has been dismissed
-    if (dismissedAdviceWeeks.includes(lastSundayWeekKey)) {
-      return false;
-    }
-    
-    // Check if we have data for this week (need at least one week to show advice)
-    // The advice is for the most recent Sunday's week, so we need that week to exist in our data
     const hasDataForWeek = weeklyData.some(w => w.weekId === lastSundayWeekKey);
-    if (!hasDataForWeek) {
-      // If we don't have data for the last Sunday's week yet, don't show
-      // This handles the case where it's Sunday but we haven't completed that week yet
-      return false;
-    }
-    
-    // Show advice (it appears on Sunday and stays until dismissed or next Sunday)
-    return true;
-  }, [baseAdvice, settings, weeklyData, dismissedAdviceWeeks]);
+    if (!hasDataForWeek) return res;
+
+    return { showAdvice: true, showPreWeightPrompt: false };
+
+  }, [baseAdvice, settings, weeklyData, dismissedAdviceWeeks, weights, adviceSkippedToday]);
   
-  const advice = shouldShowAdvice ? baseAdvice : null;
+  const advice = showAdvice ? baseAdvice : null;
   
   // Handler to dismiss advice
   const handleDismissAdvice = async () => {
@@ -793,6 +818,16 @@ export default function App() {
       }
   };
 
+  const handlePointClick = (point: ChartPoint) => {
+      // Find the specific entry
+      if (chartMode === 'daily') {
+          const entry = weights.find(w => w.date === point.label);
+          if (entry) {
+              setSelectedEntry(entry);
+          }
+      }
+  };
+
   // --- CHART COMPONENT ---
   const ChartRenderer = ({ data, mode, height, width, settings, projection, weeklyData }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null, weeklyData: WeeklySummary[] }) => {
     if (!data || data.length === 0) return (
@@ -808,32 +843,26 @@ export default function App() {
     const padding = { top: 20, bottom: 24, left: 32, right: 16 };
 
     // --- SCALING CALCULATIONS ---
-    // Calculate tunnel tolerance based on mode
     const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
     
-    // Collect all values including tunnel boundaries for proper scaling
     const validValues = data.flatMap<number>(d => {
         const vals: number[] = [];
         if (d.actual !== null) vals.push(d.actual);
         if (d.trend !== null) vals.push(d.trend);
         
-        // Include tunnel boundaries if projection exists
         if (projection && settings) {
             const msPerDay = 86400000;
             let idealY = 0;
             
             if (mode === 'weekly') {
-                // Calculate week difference mathematically
                 const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
                 const diffWeeks = Math.round(diffDays / 7);
                 idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
             } else {
-                // Daily mode: Use exact linear time
                 const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
                 idealY = projection.anchorVal + (diffDays * projection.dailySlope);
             }
             
-            // Include tunnel boundaries (± tolerance)
             vals.push(idealY + tunnelTolerance);
             vals.push(idealY - tunnelTolerance);
         }
@@ -884,16 +913,13 @@ export default function App() {
         gridStops.push(parseFloat(val.toFixed(3)));
     }
 
-    // --- CREATE WEEK DELTA MAP FOR DAILY MODE ---
     const weekDeltaMap = useMemo(() => {
         if (mode !== 'daily' || !settings) return new Map<string, number>();
         const map = new Map<string, number>();
-        // Create a map from week key to delta
         const weekKeyToDelta = new Map<string, number>();
         weeklyData.forEach(week => {
             weekKeyToDelta.set(week.weekId, week.delta);
         });
-        // Map each day in the data to its week's delta
         data.forEach(point => {
             const weekKey = getWeekKey(point.label);
             const delta = weekKeyToDelta.get(weekKey);
@@ -904,8 +930,10 @@ export default function App() {
         return map;
     }, [mode, weeklyData, settings, data]);
 
-    // --- GRADIENT LOGIC (Smooth RGB Interpolation) ---
+    // --- GRADIENT LOGIC (Only for Weekly View now) ---
     const stops = useMemo(() => {
+        // If daily mode, we don't use gradient
+        if (mode === 'daily') return [];
         if (data.length < 2 || !settings) return [];
         
         const stopList: React.ReactElement[] = [];
@@ -917,22 +945,10 @@ export default function App() {
             
             let diff: number;
             
-            if (mode === 'weekly') {
-                // Calculate Slope for this segment (weekly mode)
-                const currentSlope = point.trend - prev.trend;
-                const targetSlope = settings.weeklyRate; 
-                diff = Math.abs(currentSlope - targetSlope);
-            } else {
-                // Daily mode: use the week's delta for this day
-                const dayDate = point.label;
-                const weekDelta = weekDeltaMap.get(dayDate);
-                if (weekDelta === undefined) {
-                    // If day doesn't have a week delta, skip
-                    return;
-                }
-                const targetSlope = settings.weeklyRate;
-                diff = Math.abs(weekDelta - targetSlope);
-            }
+            // Weekly logic
+            const currentSlope = point.trend - prev.trend;
+            const targetSlope = settings.weeklyRate; 
+            diff = Math.abs(currentSlope - targetSlope);
             
             const color = interpolateColor(diff);
             const offset = (i / denominator) * 100;
@@ -945,7 +961,7 @@ export default function App() {
         });
         
         return stopList;
-    }, [data, settings, mode, denominator, weekDeltaMap]);
+    }, [data, settings, mode, denominator]);
 
     // --- TREND LINE PATH ---
     let trendPath = '';
@@ -967,8 +983,6 @@ export default function App() {
     
     if (projection && data.length > 0) {
         const msPerDay = 86400000;
-        
-        // Arrays to store polygon points for tunnel
         const upperPoints: [number, number][] = [];
         const lowerPoints: [number, number][] = [];
 
@@ -976,28 +990,19 @@ export default function App() {
              let idealY = 0;
              const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
 
-            // --- PROJECTION LOGIC ---
              if (mode === 'weekly') {
-                // Use mathematical week difference to ensure accuracy even with filtered data
-                // This handles cases where the anchor point might be off-screen
                 const diffWeeks = Math.round(diffDays / 7);
                 idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
              } else {
-                 // Daily mode: Use exact linear time
                  idealY = projection.anchorVal + (diffDays * projection.dailySlope);
              }
              
              const x = getX(i);
              const y = getY(idealY);
              
-             // Construct projection line path
              if (i === 0) projectionPath += `M ${x},${y} `;
              else projectionPath += `L ${x},${y} `;
              
-             // Construct tunnel points (Upper/Lower based on +/- tolerance)
-             // Note: In SVG coords, lower value is higher on screen. 
-             // "Upper visual limit" corresponds to Higher Weight = idealY + tol
-             // "Lower visual limit" corresponds to Lower Weight = idealY - tol
              const yUpper = clampToAxis(getY(idealY + tunnelTolerance));
              const yLower = clampToAxis(getY(idealY - tunnelTolerance));
              
@@ -1005,14 +1010,11 @@ export default function App() {
              lowerPoints.push([x, yLower]);
         });
         
-        // Build Closed Polygon for Tunnel
         if (upperPoints.length > 0) {
             tunnelPath = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
-            // Top edge
             for (let k = 1; k < upperPoints.length; k++) {
                 tunnelPath += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
             }
-            // Bottom edge (reverse order)
             for (let k = lowerPoints.length - 1; k >= 0; k--) {
                 tunnelPath += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
             }
@@ -1033,14 +1035,14 @@ export default function App() {
         <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
           
           <defs>
-             {stops.length > 0 && (
-                 <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
-                    {stops}
-                 </linearGradient>
-             )}
+              {mode === 'weekly' && stops.length > 0 && (
+                  <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
+                     {stops}
+                  </linearGradient>
+              )}
           </defs>
 
-          {/* HORIZONTAL GRID & Y-AXIS LABELS */}
+          {/* GRID & AXIS */}
           {gridStops.map((val, idx) => (
              <g key={idx}>
                <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
@@ -1051,37 +1053,26 @@ export default function App() {
           <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
           <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-          {/* TUNNEL (SHADED AREA) */}
+          {/* TUNNEL */}
           {tunnelPath && (
-              <path 
-                d={tunnelPath}
-                fill="#10b981"
-                opacity="0.1"
-                stroke="none"
-              />
+              <path d={tunnelPath} fill="#10b981" opacity="0.1" stroke="none" />
           )}
 
-          {/* PROJECTION LINE (PATH) */}
+          {/* PROJECTION */}
           {projectionPath && (
-              <path 
-                d={projectionPath}
-                fill="none"
-                stroke="#10b981" 
-                strokeWidth="1.5"
-                strokeDasharray="4 4" 
-                opacity="0.8"
-              />
+              <path d={projectionPath} fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />
           )}
 
           {/* TREND LINE */}
           {count > 1 && (
              <path 
-                d={trendPath} 
-                fill="none" 
-                stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"} 
-                strokeWidth={expanded ? "3" : "2"} 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
+               d={trendPath} 
+               fill="none" 
+               // Change line color in daily mode to Blue 600 (#2563eb)
+               stroke={mode === 'weekly' ? (stops.length > 0 ? "url(#trendGradient)" : "#10b981") : "#2563eb"} 
+               strokeWidth={expanded ? "3" : "2"} 
+               strokeLinecap="round" 
+               strokeLinejoin="round" 
              />
           )}
 
@@ -1092,7 +1083,10 @@ export default function App() {
              const py = getY(d.actual);
              
              return (
-                <g key={i}>
+                <g key={i} onClick={() => handlePointClick(d)} className="cursor-pointer">
+                    {/* Transparent Hit Area */}
+                    <circle cx={px} cy={py} r={10} fill="transparent" />
+                    {/* Visible Point - Change fill to Emerald (#10b981) */}
                     <circle 
                         cx={px} 
                         cy={py} 
@@ -1109,27 +1103,19 @@ export default function App() {
              );
           })}
 
-          {/* SMART X-AXIS LABELS */}
+          {/* LABELS */}
           {data.map((d, i) => {
              const xPos = getX(i);
              const isFirst = i === 0;
              const isLast = i === data.length - 1;
-             
              let shouldRender = false;
              let anchor: "start" | "middle" | "end" = "middle";
 
-             if (isFirst) {
-                 shouldRender = true;
-                 anchor = "start";
-             }
-             else if (isLast) {
-                 shouldRender = true;
-                 anchor = "end";
-             }
+             if (isFirst) { shouldRender = true; anchor = "start"; }
+             else if (isLast) { shouldRender = true; anchor = "end"; }
              else {
                  const distToLast = lastPointX - xPos;
                  const distToPrev = xPos - lastRenderedX;
-                 
                  if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
                      shouldRender = true;
                  }
@@ -1176,6 +1162,7 @@ export default function App() {
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
       
+      {/* HEADER */}
       <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
         <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
         <div className="flex gap-2">
@@ -1191,7 +1178,7 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto w-full">
+      <div className="flex-1 overflow-y-auto w-full relative">
         <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-full flex flex-col' : 'space-y-5'}`}>
             
             {view === 'dashboard' && (
@@ -1213,7 +1200,21 @@ export default function App() {
                     </div>
                 </div>
 
-                {advice && (
+                {/* ADVICE SECTION - REPLACED BY PROMPT IF SUNDAY & NO WEIGHT */}
+                {showPreWeightPrompt && (
+                    <div className="px-4 py-3 rounded-xl border flex items-center gap-3 bg-blue-500/10 border-blue-500/20 text-blue-200 relative">
+                        <Utensils size={18} className="shrink-0" />
+                        <span className="text-sm font-semibold flex-1">Add today's weight to receive this week's advice.</span>
+                        <button
+                            onClick={() => setAdviceSkippedToday(true)}
+                            className="shrink-0 px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-xs font-bold transition-colors flex items-center gap-1"
+                        >
+                            Skip <SkipForward size={12} />
+                        </button>
+                    </div>
+                )}
+
+                {advice && !showPreWeightPrompt && (
                     <div className={`px-4 py-3 rounded-xl border flex items-center gap-3 ${advice.color} relative`}>
                         <Utensils size={18} className="shrink-0" />
                         <span className="text-sm font-semibold flex-1">{advice.text}</span>
@@ -1262,12 +1263,16 @@ export default function App() {
                         style={{ touchAction: 'none' }} 
                     >
                         <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-5/6 mx-auto">
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div>Trend</div>
+                            <div className="flex items-center justify-center gap-1">
+                                <div className="w-3 h-0.5 bg-blue-600"></div>Trend
+                            </div>
                             <div className="flex items-center justify-center gap-1">
                                 <div className="w-3 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
                                 Tunnel
                             </div>
-                            <div className="flex items-center justify-center gap-1"><div className="w-2 h-2 rounded-full bg-slate-500"></div>Readings</div>
+                            <div className="flex items-center justify-center gap-1">
+                                <div className="w-2 h-2 rounded-full bg-emerald-500"></div>Readings
+                            </div>
                         </div>
 
                         {showExplanation && (
@@ -1302,9 +1307,21 @@ export default function App() {
                             />
                             <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
                         </div>
-                        <div className="relative">
-                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
-                            <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
+                        <div className="flex gap-2">
+                             <div className="relative flex-1">
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
+                                <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
+                            </div>
+                             <div className="relative flex-1">
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><MessageSquare size={16} /></div>
+                                <input 
+                                    type="text" 
+                                    placeholder="Comment..."
+                                    className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 placeholder:text-blue-200/50" 
+                                    value={commentInput} 
+                                    onChange={(e) => setCommentInput(e.target.value)} 
+                                />
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -1359,12 +1376,24 @@ export default function App() {
                                     </div>
                                     <div className="space-y-2">
                                     {item.entries.slice().reverse().map((entry) => (
-                                        <div key={entry.id} className="flex justify-between items-center text-sm">
-                                        <div className="flex items-center gap-2 text-slate-500"><Calendar size={12} /><span>{formatDate(entry.date)}</span></div>
-                                        <div className="flex items-center gap-3">
-                                            <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry.id); }} className="text-slate-600 hover:text-red-400"><Trash2 size={12} /></button>
-                                        </div>
+                                        <div 
+                                            key={entry.id} 
+                                            className="flex justify-between items-center text-sm p-1 rounded hover:bg-slate-800 cursor-pointer"
+                                            onClick={() => setSelectedEntry(entry)}
+                                        >
+                                            <div className="flex items-center gap-2 text-slate-500">
+                                                <Calendar size={12} /><span>{formatDate(entry.date)}</span>
+                                                {entry.comment && <MessageSquare size={12} className="text-blue-400" />}
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className="font-medium text-slate-300">{entry.weight} kg</span>
+                                                <button 
+                                                    onClick={(e) => { e.stopPropagation(); setDeleteConfirmationId(entry.id); }} 
+                                                    className="text-slate-600 hover:text-red-400 p-1"
+                                                >
+                                                    <Trash2 size={12} />
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
                                     </div>
@@ -1439,6 +1468,78 @@ export default function App() {
             )}
         </div>
       </div>
+
+      {/* MODALS */}
+      {/* 1. ENTRY DETAILS MODAL */}
+      {selectedEntry && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" onClick={() => setSelectedEntry(null)}>
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                  <button onClick={() => setSelectedEntry(null)} className="absolute top-4 right-4 text-slate-500 hover:text-white">
+                      <X size={20} />
+                  </button>
+                  
+                  <div className="flex flex-col gap-4">
+                      <div className="text-center border-b border-slate-800 pb-4">
+                          <h3 className="text-3xl font-bold text-white mb-1">{selectedEntry.weight} <span className="text-lg text-slate-500 font-normal">kg</span></h3>
+                          <p className="text-slate-400 font-medium flex items-center justify-center gap-2">
+                              {formatDate(selectedEntry.date)}
+                          </p>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                           <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                               <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
+                               <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                                   <Clock size={14} className="text-blue-500" />
+                                   {formatTime(selectedEntry.createdAt) || '--:--'}
+                               </p>
+                           </div>
+                           <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                               <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Date</p>
+                               <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                                   <Calendar size={14} className="text-blue-500" />
+                                   {formatDate(selectedEntry.date)}
+                               </p>
+                           </div>
+                      </div>
+
+                      {selectedEntry.comment && (
+                          <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
+                              <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
+                                  <MessageSquare size={12} /> Comment
+                              </p>
+                              <p className="text-sm text-slate-200 italic">"{selectedEntry.comment}"</p>
+                          </div>
+                      )}
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 2. DELETE CONFIRMATION MODAL */}
+      {deleteConfirmationId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+                  <h3 className="text-lg font-bold text-white mb-2">Delete Entry?</h3>
+                  <p className="text-slate-400 text-sm mb-6">Are you sure you want to delete this weight log? This action cannot be undone.</p>
+                  <div className="flex gap-3">
+                      <button 
+                          onClick={() => setDeleteConfirmationId(null)}
+                          className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
+                      >
+                          No, Keep
+                      </button>
+                      <button 
+                          onClick={handleDeleteEntry}
+                          className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
+                      >
+                          Yes, Delete
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+      
     </div>
   );
 }
