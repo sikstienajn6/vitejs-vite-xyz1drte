@@ -21,7 +21,7 @@ export function LogWeightForm({ weightInput, setWeightInput, dateInput, setDateI
             type="text" inputMode="decimal" placeholder="0.0" required
             className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl"
             value={weightInput}
-            onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
+            onChange={(e) => setWeightInput(e.target.value.replace(/\s/g, '').replace(',', '.'))}
           />
           <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
         </div>

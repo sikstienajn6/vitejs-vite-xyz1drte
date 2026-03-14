@@ -80,10 +80,7 @@ export function ChartSection({
         onPointClick={onPointClick}
       />
 
-      <div
-        className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none"
-        style={{ touchAction: 'none' }}
-      >
+      <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none">
         <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-5/6 mx-auto">
           <div className="flex items-center justify-center gap-1">
             <div className="w-3 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500 rounded-full"></div>Trend
