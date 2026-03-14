@@ -18,76 +18,48 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  if (!data || data.length === 0) return (
-    <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{ height: height }}>
-      <p className="text-sm">Log data to see trend</p>
-    </div>
-  );
-
+  const denominator = data.length > 1 ? data.length - 1 : 1;
   const renderWidth = width > 0 ? width : 100;
-  const expanded = height > SNAP_THRESHOLD;
   const padding = { top: 20, bottom: 24, left: 32, right: 16 };
-
-  const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
-
-  const validValues = data.flatMap<number>(d => {
-    const vals: number[] = [];
-    if (d.actual !== null) vals.push(d.actual);
-    if (d.trend !== null) vals.push(d.trend);
-
-    if (projection && settings) {
-      const msPerDay = 86400000;
-      const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-
-      vals.push(idealY + tunnelTolerance);
-      vals.push(idealY - tunnelTolerance);
-    }
-
-    return vals;
-  });
-
-  const rawMin = Math.min(...validValues);
-  const rawMax = Math.max(...validValues);
-  const rawRange = rawMax - rawMin;
-
-  const effectiveRange = Math.max(rawRange, 0.5);
-  const buffer = effectiveRange * 0.05;
-  const midPoint = (rawMax + rawMin) / 2;
-
-  const minVal = midPoint - (effectiveRange / 2) - buffer;
-  const maxVal = midPoint + (effectiveRange / 2) + buffer;
-  const range = maxVal - minVal;
-
   const availableWidth = renderWidth - padding.left - padding.right;
-  const count = data.length;
-  const denominator = count > 1 ? count - 1 : 1;
+  const getX = useCallback((i: number) => padding.left + (i / denominator) * availableWidth, [padding.left, denominator, availableWidth]);
 
-  const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
-  const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
-  const axisLineY = height - padding.bottom;
-  const clampToAxis = (val: number) => Math.min(val, axisLineY);
-
-  const gridCount = 5;
-  const computeNiceStep = (targetStep: number) => {
-    if (targetStep <= 0) return 0.1;
-    const exponent = Math.floor(Math.log10(targetStep));
-    const base = Math.pow(10, exponent);
-    const candidates = [1, 2, 2.5, 5, 10];
-    for (const mult of candidates) {
-      const step = mult * base;
-      if (targetStep <= step) return step;
+  const findNearestIndex = useCallback((clientX: number) => {
+    if (!svgRef.current || data.length === 0) return null;
+    const rect = svgRef.current.getBoundingClientRect();
+    const svgX = ((clientX - rect.left) / rect.width) * renderWidth;
+    
+    let closestIdx = 0;
+    let closestDist = Infinity;
+    for (let i = 0; i < data.length; i++) {
+      const dist = Math.abs(getX(i) - svgX);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIdx = i;
+      }
     }
-    return 10 * base;
-  };
-  const desiredStep = range / (gridCount - 1);
-  const niceStep = computeNiceStep(desiredStep);
-  const gridMin = Math.floor(minVal / niceStep) * niceStep;
-  const gridMax = Math.ceil(maxVal / niceStep) * niceStep;
-  const gridStops: number[] = [];
-  for (let val = gridMin; val <= gridMax + niceStep / 2; val += niceStep) {
-    gridStops.push(parseFloat(val.toFixed(3)));
-  }
+    return closestIdx;
+  }, [data, renderWidth, getX]);
+
+  const handleInteractionStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const idx = findNearestIndex(clientX);
+    setActiveIndex(idx);
+  }, [findNearestIndex]);
+
+  const handleInteractionMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    if (activeIndex === null && !('touches' in e)) return;
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const idx = findNearestIndex(clientX);
+    setActiveIndex(idx);
+  }, [activeIndex, findNearestIndex]);
+
+  const handleInteractionEnd = useCallback(() => {
+    if (activeIndex !== null && data[activeIndex]) {
+      onPointClick(data[activeIndex]);
+    }
+    setActiveIndex(null);
+  }, [activeIndex, data, onPointClick]);
 
   const stops = useMemo(() => {
     if (data.length < 2 || !settings) return [];
@@ -130,6 +102,70 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
 
     return stopList;
   }, [data, settings, mode, denominator]);
+
+  if (!data || data.length === 0) return (
+    <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{ height: height }}>
+      <p className="text-sm">Log data to see trend</p>
+    </div>
+  );
+
+  const expanded = height > SNAP_THRESHOLD;
+  const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
+
+  const validValues = data.flatMap<number>(d => {
+    const vals: number[] = [];
+    if (d.actual !== null) vals.push(d.actual);
+    if (d.trend !== null) vals.push(d.trend);
+
+    if (projection && settings) {
+      const msPerDay = 86400000;
+      const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
+      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+
+      vals.push(idealY + tunnelTolerance);
+      vals.push(idealY - tunnelTolerance);
+    }
+
+    return vals;
+  });
+
+  const rawMin = Math.min(...validValues);
+  const rawMax = Math.max(...validValues);
+  const rawRange = rawMax - rawMin;
+
+  const effectiveRange = Math.max(rawRange, 0.5);
+  const buffer = effectiveRange * 0.05;
+  const midPoint = (rawMax + rawMin) / 2;
+
+  const minVal = midPoint - (effectiveRange / 2) - buffer;
+  const maxVal = midPoint + (effectiveRange / 2) + buffer;
+  const range = maxVal - minVal;
+
+  const count = data.length;
+  const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
+  const axisLineY = height - padding.bottom;
+  const clampToAxis = (val: number) => Math.min(val, axisLineY);
+
+  const gridCount = 5;
+  const computeNiceStep = (targetStep: number) => {
+    if (targetStep <= 0) return 0.1;
+    const exponent = Math.floor(Math.log10(targetStep));
+    const base = Math.pow(10, exponent);
+    const candidates = [1, 2, 2.5, 5, 10];
+    for (const mult of candidates) {
+      const step = mult * base;
+      if (targetStep <= step) return step;
+    }
+    return 10 * base;
+  };
+  const desiredStep = range / (gridCount - 1);
+  const niceStep = computeNiceStep(desiredStep);
+  const gridMin = Math.floor(minVal / niceStep) * niceStep;
+  const gridMax = Math.ceil(maxVal / niceStep) * niceStep;
+  const gridStops: number[] = [];
+  for (let val = gridMin; val <= gridMax + niceStep / 2; val += niceStep) {
+    gridStops.push(parseFloat(val.toFixed(3)));
+  }
 
   let trendPath = '';
   if (count > 1) {
@@ -196,46 +232,6 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   const lastPointX = getX(data.length - 1);
 
   // --- Interactive Tooltip Logic ---
-  const findNearestIndex = useCallback((clientX: number) => {
-    if (!svgRef.current || data.length === 0) return null;
-    const rect = svgRef.current.getBoundingClientRect();
-    // Convert screen X to SVG coordinate space
-    const svgX = ((clientX - rect.left) / rect.width) * renderWidth;
-    
-    let closestIdx = 0;
-    let closestDist = Infinity;
-    for (let i = 0; i < data.length; i++) {
-      const dist = Math.abs(getX(i) - svgX);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closestIdx = i;
-      }
-    }
-    return closestIdx;
-  }, [data, renderWidth, availableWidth, padding.left, denominator]);
-
-  const handleInteractionStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const idx = findNearestIndex(clientX);
-    setActiveIndex(idx);
-  }, [findNearestIndex]);
-
-  const handleInteractionMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    if (activeIndex === null && !('touches' in e)) return; // mouse only moves when already clicking
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const idx = findNearestIndex(clientX);
-    setActiveIndex(idx);
-  }, [activeIndex, findNearestIndex]);
-
-  const handleInteractionEnd = useCallback(() => {
-    // Keep the crosshair visible briefly for click/tap, then clear
-    // For tap: fire onPointClick if we have an active point
-    if (activeIndex !== null && data[activeIndex]) {
-      onPointClick(data[activeIndex]);
-    }
-    setActiveIndex(null);
-  }, [activeIndex, data, onPointClick]);
-
   // Active point data for tooltip
   const activePoint = activeIndex !== null ? data[activeIndex] : null;
   const activeX = activeIndex !== null ? getX(activeIndex) : 0;
