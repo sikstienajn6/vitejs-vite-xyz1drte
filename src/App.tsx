@@ -1,1550 +1,168 @@
-import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithPopup, 
-  GoogleAuthProvider,
-  signOut,
-  onAuthStateChanged,
-  type User 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  query, 
-  onSnapshot, 
-  orderBy, 
-  doc, 
-  setDoc,
-  serverTimestamp,
-  deleteDoc
-} from 'firebase/firestore';
-import { 
-  TrendingDown, 
-  TrendingUp, 
-  Plus, 
-  Settings, 
-  Trash2, 
-  ChevronDown, 
-  ChevronRight,
-  Activity,
-  Calendar,
-  Clock,
-  LogOut,
-  LogIn,
-  Info,
-  Utensils,
-  Check,
-  MessageSquare,
-  X,
-  SkipForward
-} from 'lucide-react';
+import { useState } from 'react';
+import type { ChartPoint, WeightEntry } from './lib/types';
 
-// --- CONFIGURATION ---
-const firebaseConfig = {
-  apiKey: "AIzaSyBxmZXjDUpeOUPWFD_Bg-dOP4J4_F3R1rE",
-  authDomain: "weighttracker-b4b79.firebaseapp.com",
-  projectId: "weighttracker-b4b79",
-  storageBucket: "weighttracker-b4b79.firebasestorage.app",
-  messagingSenderId: "895893600072",
-  appId: "1:895893600072:web:e329aba69602d46fa8e57d",
-};
+import { useAuth } from './hooks/useAuth';
+import { useWeightData } from './hooks/useWeightData';
+import { useWeightCalculations } from './hooks/useWeightCalculations';
+import { useChartDrag } from './hooks/useChartDrag';
+import { useContainerWidth } from './hooks/useContainerWidth';
+import { useAdvice } from './hooks/useAdvice';
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const googleProvider = new GoogleAuthProvider();
+import { LoadingScreen } from './components/LoadingScreen';
+import { LoginScreen } from './components/LoginScreen';
+import { AppHeader } from './components/AppHeader';
+import { StatCards } from './components/StatCards';
+import { AdviceBanner } from './components/AdviceBanner';
+import { ChartSection } from './components/ChartSection';
+import { LogWeightForm } from './components/LogWeightForm';
+import { WeeklyHistory } from './components/WeeklyHistory';
+import { SettingsView } from './components/SettingsView';
+import { EntryDetailModal } from './components/EntryDetailModal';
+import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 
-// --- LOGIC CONSTANTS ---
-const TARGET_TOLERANCE = 0.2; 
-const EMA_ALPHA = 0.1; 
-const RATE_TOLERANCE_GREEN = 0.1;
-const RATE_TOLERANCE_ORANGE = 0.25;
-const WEEKLY_TUNNEL_WIDTH = 0.3;
-const DAILY_TUNNEL_WIDTH = 0.8;
-
-// Height Constants
-const HEIGHT_COMPRESSED = 250;
-const HEIGHT_EXPANDED = 450;
-const SNAP_THRESHOLD = (HEIGHT_EXPANDED + HEIGHT_COMPRESSED) / 2;
-
-// --- Types ---
-interface WeightEntry {
-  id: string;
-  weight: number;
-  date: string;
-  comment?: string;
-  createdAt: any;
-}
-
-interface SettingsData {
-  weeklyRate: number;
-  dailyCalories?: number; 
-  updatedAt: any;
-}
-
-interface WeeklySummary {
-  weekId: string;
-  weekLabel: string;
-  actual: number; 
-  rawAvg: number; 
-  median: number;
-  count: number;
-  entries: WeightEntry[];
-  target: number;
-  delta: number;
-  hasPrev: boolean;
-  inTunnel: boolean; 
-}
-
-interface ChartPoint {
-    label: string; 
-    dateObj: Date; 
-    actual: number | null; 
-    trend: number | null;  
-    weekLabel?: string;
-}
-
-interface ProjectionData {
-  anchorDate: Date;
-  anchorVal: number;
-  dailySlope: number;
-  weeklySlope: number; 
-  anchorIndex?: number;
-}
-
-// --- Helper Functions ---
-const getWeekKey = (date: string) => {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
-  const yearStart = new Date(Date.UTC(d.getFullYear(), 0, 1));
-  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-  return `${d.getFullYear()}-W${weekNo.toString().padStart(2, '0')}`;
-};
-
-const getLastSundayWeekKey = () => {
-  const today = new Date();
-  const dayOfWeek = today.getDay();
-  const daysSinceSunday = dayOfWeek === 0 ? 0 : dayOfWeek;
-  const lastSunday = new Date(today);
-  lastSunday.setDate(today.getDate() - daysSinceSunday);
-  return getWeekKey(lastSunday.toISOString().split('T')[0]);
-};
-
-const formatDate = (dateString: string) => {
-  if (!dateString) return '';
-  const d = new Date(dateString);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-};
-
-const formatTime = (timestamp: any) => {
-    if (!timestamp) return '';
-    const d = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-};
-
-const getDaysArray = (start: Date, end: Date) => {
-    const arr: string[] = [];
-    for(let dt=new Date(start); dt<=end; dt.setDate(dt.getDate()+1)){
-        arr.push(new Date(dt).toISOString().split('T')[0]);
-    }
-    return arr;
-};
-
-const getMedian = (values: number[]) => {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
-};
-
-const interpolateColor = (diff: number) => {
-    const cGreen = [16, 185, 129];
-    const cOrange = [251, 191, 36];
-    const cRed = [239, 68, 68];
-
-    let color1, color2, t;
-
-    if (diff <= 0.15) {
-        color1 = cGreen;
-        color2 = cOrange;
-        t = diff / 0.15;
-    } else {
-        color1 = cOrange;
-        color2 = cRed;
-        t = Math.min(1, (diff - 0.15) / 0.15);
-    }
-
-    const r = Math.round(color1[0] + (color2[0] - color1[0]) * t);
-    const g = Math.round(color1[1] + (color2[1] - color1[1]) * t);
-    const b = Math.round(color1[2] + (color2[2] - color1[2]) * t);
-
-    return `rgb(${r}, ${g}, ${b})`;
-};
-
-// --- Main Component ---
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [weights, setWeights] = useState<WeightEntry[]>([]);
-  const [settings, setSettings] = useState<SettingsData | null>(null);
-  const [loading, setLoading] = useState(true);
-  
-  const [weightInput, setWeightInput] = useState('');
-  const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
-  const [commentInput, setCommentInput] = useState('');
-  const [view, setView] = useState<'dashboard' | 'settings'>('dashboard'); 
-  
-  // Settings State
-  const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
-  const [weeklyRate, setWeeklyRate] = useState('0.2'); 
-  const [monthlyRate, setMonthlyRate] = useState('0.87');
-  const [dailyCalories, setDailyCalories] = useState('');
+  // --- Core State ---
+  const { user, loading, handleGoogleLogin, handleLogout } = useAuth();
+  const data = useWeightData(user);
 
-  // Chart State
+  // --- Chart UI State ---
   const [chartMode, setChartMode] = useState<'weekly' | 'daily'>('weekly');
   const [filterRange, setFilterRange] = useState<'1M' | '3M' | 'ALL'>('3M');
-  
-  // Drag & Snap State
-  const [chartHeight, setChartHeight] = useState(HEIGHT_COMPRESSED);
-  const [isDragging, setIsDragging] = useState(false);
   const [showExplanation, setShowExplanation] = useState(false);
-  
-  // Responsive Width State
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
-  
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
-  const [dismissedAdviceWeeks, setDismissedAdviceWeeks] = useState<string[]>([]); 
+  const [selectedEntry, setSelectedEntry] = useState<WeightEntry | null>(null);
   const [adviceSkippedToday, setAdviceSkippedToday] = useState(false);
 
-  // Modal / Popup States
-  const [deleteConfirmationId, setDeleteConfirmationId] = useState<string | null>(null);
-  const [selectedEntry, setSelectedEntry] = useState<WeightEntry | null>(null);
+  // --- Derived Calculations ---
+  const { weeklyData, trendMap, currentTrendRate, projectionData, finalChartData } =
+    useWeightCalculations(data.weights, data.settings, chartMode, filterRange);
 
-  // --- AUTH ---
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
+  // --- Chart Drag ---
+  const { chartHeight, isDragging, handleDragStart, toggleExpand } = useChartDrag();
+  const { containerRef, containerWidth } = useContainerWidth([data.view, loading]);
 
-  // --- MEASURE WIDTH ---
-  useLayoutEffect(() => {
-    if (!containerRef.current) return;
-    const ro = new ResizeObserver(entries => {
-      for (let entry of entries) {
-        setContainerWidth(entry.contentRect.width);
-      }
-    });
-    ro.observe(containerRef.current);
-    return () => ro.disconnect();
-  }, [view, loading]); 
+  // --- Advice ---
+  const { advice, showPreWeightPrompt } = useAdvice(
+    data.settings, weeklyData, data.weights, currentTrendRate, data.dismissedAdviceWeeks, adviceSkippedToday
+  );
 
-  const handleGoogleLogin = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error: any) {
-      console.error("Login initiation failed:", error);
-      alert("Login failed: " + error.message);
-    }
-  };
-
-  const handleLogout = async () => {
-    await signOut(auth);
-  };
-
-  // --- DATA FETCHING ---
-  useEffect(() => {
-    if (!user) {
-      setWeights([]);
-      setSettings(null);
-      return;
-    }
-
-    // @ts-ignore
-    const qWeights = query(collection(db, 'users', user.uid, 'weights'), orderBy('date', 'desc'));
-    const unsubWeights = onSnapshot(qWeights, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as WeightEntry[];
-      setWeights(data);
-    }, (err) => console.error("Weight fetch error:", err));
-
-    // @ts-ignore
-    const docRef = doc(db, 'users', user.uid, 'settings', 'config');
-    const unsubSettings = onSnapshot(docRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const s = snapshot.data() as SettingsData;
-        setSettings(s);
-        
-        const wRate = s.weeklyRate ? s.weeklyRate : 0;
-        const isNegative = wRate < 0;
-        const absRate = Math.abs(wRate);
-        
-        setGoalType(isNegative ? 'lose' : 'gain');
-        setWeeklyRate(absRate.toString());
-        setMonthlyRate((absRate * 4.345).toFixed(2));
-        setDailyCalories(s.dailyCalories ? s.dailyCalories.toString() : '');
-      } else {
-        setSettings(null);
-        setView('settings'); 
-      }
-    }, (err) => console.error("Settings fetch error:", err));
-
-    // Fetch dismissed advice weeks
-    // @ts-ignore
-    const dismissedRef = doc(db, 'users', user.uid, 'settings', 'dismissedAdvice');
-    const unsubDismissed = onSnapshot(dismissedRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        setDismissedAdviceWeeks(data?.weeks || []);
-      } else {
-        setDismissedAdviceWeeks([]);
-      }
-    }, (err) => console.error("Dismissed advice fetch error:", err));
-
-    return () => {
-      unsubWeights();
-      unsubSettings();
-      unsubDismissed();
-    };
-  }, [user]);
-
-  // --- CALCULATIONS ---
-  const { weeklyData, trendMap, currentTrendRate } = useMemo<{
-    weeklyData: WeeklySummary[];
-    trendMap: Map<string, number>;
-    currentTrendRate: number;
-  }>(() => {
-    if (weights.length === 0 || !settings) {
-        return { weeklyData: [] as WeeklySummary[], trendMap: new Map<string, number>(), currentTrendRate: 0 };
-    }
-
-    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
-    
-    const tMap = new Map<string, number>();
-    let currentTrend = sortedWeights[0].weight; 
-
-    sortedWeights.forEach((entry) => {
-        currentTrend = currentTrend + EMA_ALPHA * (entry.weight - currentTrend);
-        tMap.set(entry.date, currentTrend);
-    });
-
-    const groups: Record<string, WeightEntry[]> = {};
-    weights.forEach(entry => {
-      const weekKey = getWeekKey(entry.date);
-      if (!groups[weekKey]) groups[weekKey] = [];
-      groups[weekKey].push(entry);
-    });
-    
-    Object.keys(groups).forEach(k => {
-      groups[k].sort((a, b) => a.date.localeCompare(b.date));
-    });
-    
-
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-    
-    let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
-      const entries = groups[weekKey];
-      const valSum = entries.reduce((sum, e) => sum + e.weight, 0);
-      const rawAvg = valSum / entries.length;
-      const median = getMedian(entries.map(e => e.weight));
-
-      const trendSum = entries.reduce((sum, e) => sum + (tMap.get(e.date) ?? e.weight), 0);
-      const trendAvg = trendSum / entries.length;
-
-      const earliestDate = entries[0].date; 
-
-      return {
-        weekId: weekKey,
-        weekLabel: formatDate(earliestDate),
-        actual: trendAvg,
-        rawAvg: rawAvg,
-        median: median,
-        count: entries.length,
-        entries: entries,
-        target: 0,
-        delta: 0,
-        hasPrev: false,
-        inTunnel: true
-      } as WeeklySummary;
-    });
-
-    for (let i = 0; i < processedWeeks.length; i++) {
-      if (i === 0) {
-        processedWeeks[i].target = processedWeeks[i].actual;
-        processedWeeks[i].hasPrev = false;
-        processedWeeks[i].delta = 0;
-      } else {
-        const prevWeek = processedWeeks[i - 1];
-        processedWeeks[i].target = prevWeek.actual + rate;
-        processedWeeks[i].delta = processedWeeks[i].actual - prevWeek.actual;
-        processedWeeks[i].hasPrev = true;
-      }
-
-      processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
-    }
-
-    const currentRate = processedWeeks.length > 1 ? processedWeeks[processedWeeks.length - 1].delta : 0;
-
-    return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
-  }, [weights, settings]);
-
-
-  // --- PROJECTION DATA ---
-  const projectionData = useMemo<ProjectionData | null>(() => {
-    if (!settings || weights.length === 0) return null;
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
-    const dailySlope = rate / 7;
-
-    if (chartMode === 'daily') {
-        const anchorIndex = weights.length > 1 ? 1 : 0;
-        const anchorEntry = weights[anchorIndex];
-        const anchorVal = trendMap.get(anchorEntry.date) ?? anchorEntry.weight;
-        
-        return {
-            anchorDate: new Date(anchorEntry.date),
-            anchorVal: anchorVal,
-            dailySlope: dailySlope,
-            weeklySlope: rate
-        };
-    } else {
-        const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
-        const anchorWeek = weeklyData[anchorIndex];
-        const anchorDate = new Date(anchorWeek.entries[0].date); 
-        
-        return {
-            anchorDate: anchorDate,
-            anchorVal: anchorWeek.actual,
-            dailySlope: dailySlope,
-            weeklySlope: rate,
-            anchorIndex: anchorIndex
-        };
-    }
-  }, [weights, weeklyData, chartMode, settings, trendMap]);
-
-
-  // --- CHART DATA PREP ---
-  const finalChartData = useMemo<ChartPoint[]>(() => {
-    if (weeklyData.length === 0 || !settings) return [];
-
-    const now = new Date();
-    const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
-    const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
-
-    let startDate = new Date('2000-01-01'); 
-    const earliestDataDate = new Date(weights[weights.length-1]?.date || now);
-
-    if (filterRange === '1M') {
-        startDate = new Date(chartEndDate); 
-        startDate.setMonth(chartEndDate.getMonth() - 1);
-    } else if (filterRange === '3M') {
-        startDate = new Date(chartEndDate);
-        startDate.setMonth(chartEndDate.getMonth() - 3);
-    } else {
-        startDate = earliestDataDate;
-    }
-
-    if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
-
-    if (chartMode === 'weekly') {
-        return weeklyData
-            .filter(w => new Date(w.entries[0].date) >= startDate)
-            .map(w => ({
-                label: w.weekId, 
-                dateObj: new Date(w.entries[0].date),
-                weekLabel: w.weekLabel,
-                actual: w.rawAvg, 
-                trend: w.actual, 
-            }));
-    } else {
-            const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-            const allDays = getDaysArray(startDate, chartEndDate);
-            
-            let lastKnownTrend = 0;
-            const startStr = startDate.toISOString().split('T')[0];
-            const sortedDates: string[] = Array.from(trendMap.keys()).map(k => String(k)).sort();
-            
-            for (let i = sortedDates.length - 1; i >= 0; i--) {
-                if (sortedDates[i] <= startStr) {
-                    const trendVal = trendMap.get(sortedDates[i]);
-                    if (trendVal !== undefined) {
-                        lastKnownTrend = trendVal;
-                        break;
-                    }
-                }
-            }
-            if (lastKnownTrend === 0 && sortedDates.length > 0) {
-                const firstTrend = trendMap.get(sortedDates[0]);
-                if (firstTrend !== undefined) {
-                    lastKnownTrend = firstTrend;
-                }
-            }
-
-            return allDays.map((dateStr) => {
-              if (trendMap.has(dateStr)) {
-                  lastKnownTrend = trendMap.get(dateStr)!;
-              }
-              
-              return {
-                label: dateStr,
-                dateObj: new Date(dateStr),
-                actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
-                trend: lastKnownTrend, 
-              };
-            }).filter(p => p.trend !== 0); 
-    }
-          
-  }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
-
-  // --- ACTIONS ---
-  const resetSettingsForm = () => {
-     if (settings) {
-       const wRate = settings.weeklyRate || 0;
-       const isNegative = wRate < 0;
-       const absRate = Math.abs(wRate);
-       setGoalType(isNegative ? 'lose' : 'gain');
-       setWeeklyRate(absRate.toString());
-       setMonthlyRate((absRate * 4.345).toFixed(2));
-       setDailyCalories(settings.dailyCalories ? settings.dailyCalories.toString() : '');
-     }
-  };
-
-  const handleNavigation = (targetView: 'dashboard' | 'settings') => {
-    if (view === 'settings' && targetView === 'dashboard') resetSettingsForm();
-    setView(targetView);
-  };
-
-  const handleRateChange = (val: string, type: 'weekly' | 'monthly') => {
-    const sanitizedVal = val.replace(',', '.');
-    if (sanitizedVal === '') { setWeeklyRate(''); setMonthlyRate(''); return; }
-    if (sanitizedVal === '.') { type === 'weekly' ? setWeeklyRate('.') : setMonthlyRate('.'); return; }
-    const num = parseFloat(sanitizedVal);
-    if (isNaN(num)) { type === 'weekly' ? setWeeklyRate(sanitizedVal) : setMonthlyRate(sanitizedVal); return; }
-    if (type === 'weekly') {
-        setWeeklyRate(sanitizedVal);
-        setMonthlyRate((num * 4.345).toFixed(2));
-    } else {
-        setMonthlyRate(sanitizedVal);
-        setWeeklyRate((num / 4.345).toFixed(2));
-    }
-  };
-
-  const handleAddWeight = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!weightInput || !user) return;
-    try {
-      const sanitizedWeight = parseFloat(weightInput.replace(',', '.'));
-      // @ts-ignore
-      await setDoc(doc(db, 'users', user.uid, 'weights', dateInput), {
-        weight: sanitizedWeight,
-        date: dateInput,
-        comment: commentInput,
-        createdAt: serverTimestamp()
-      });
-      setWeightInput('');
-      setCommentInput('');
-    } catch (err) {
-      console.error("Error adding weight:", err);
-      alert("Error saving.");
-    }
-  };
-
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user) return;
-    try {
-      let rate = parseFloat(weeklyRate);
-      if (goalType === 'lose') rate = -Math.abs(rate);
-      else rate = Math.abs(rate);
-
-      const cals = dailyCalories ? parseInt(dailyCalories) : 0;
-
-      // @ts-ignore
-      await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
-        weeklyRate: rate,
-        dailyCalories: cals,
-        updatedAt: serverTimestamp()
-      });
-      setView('dashboard');
-    } catch (err) {
-      console.error("Error saving settings:", err);
-    }
-  };
-
-  const handleExportCsv = () => {
-    if (!weights || weights.length === 0) {
-      alert("No data to export.");
-      return;
-    }
-
-    const sorted = [...weights].sort((a, b) => a.date.localeCompare(b.date));
-    const weekAgg = new Map<string, { avg: number; median: number }>();
-    weeklyData.forEach(w => {
-      weekAgg.set(w.weekId, { avg: w.rawAvg, median: w.median });
-    });
-
-    const header = ['date', 'weight', 'comment', 'ema', 'week_id', 'week_median', 'week_average'];
-    const rows = sorted.map(entry => {
-      const weekId = getWeekKey(entry.date);
-      const ema = trendMap.get(entry.date) ?? '';
-      const agg = weekAgg.get(weekId);
-      const median = agg?.median ?? '';
-      const avg = agg?.avg ?? '';
-      const commentSafe = entry.comment ? `"${entry.comment.replace(/"/g, '""')}"` : '';
-      return [entry.date, entry.weight, commentSafe, ema, weekId, median, avg].join(',');
-    });
-
-    const csv = [header.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'weights.csv';
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDeleteEntry = async () => {
-    if (!deleteConfirmationId || !user) return;
-    try {
-      // @ts-ignore
-      await deleteDoc(doc(db, 'users', user.uid, 'weights', deleteConfirmationId));
-      setDeleteConfirmationId(null);
-    } catch (err) {
-      console.error("Delete error", err);
-    }
-  };
-
+  // --- Handlers ---
   const toggleWeek = (weekId: string) => {
-    setExpandedWeeks(prev => 
+    setExpandedWeeks(prev =>
       prev.includes(weekId) ? prev.filter(id => id !== weekId) : [...prev, weekId]
     );
   };
 
-  const getRateAdherenceColor = (rate: number) => {
-    if (!settings) return 'text-slate-500';
-    const targetRate = settings.weeklyRate;
-    const deviation = Math.abs(rate - targetRate);
-    if (deviation <= RATE_TOLERANCE_GREEN) return 'text-emerald-400';
-    if (deviation <= RATE_TOLERANCE_ORANGE) return 'text-amber-400';
-    return 'text-rose-400'; 
-  };
-
-  // --- ADVICE LOGIC (Dynamic Calories) ---
-  const getWeekTrendStatus = (delta: number) => {
-    if (!settings) return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500' };
-    const targetRate = settings.weeklyRate;
-    
-    // Calculate required adjustment in Calories
-    // 1 kg weight = 7700 kcal
-    // Delta is change over 1 week (7 days)
-    // Daily surplus/deficit = (Rate / 7) * 7700
-    // Difference needed = (TargetRate - CurrentRate) / 7 * 7700
-    const diffRate = targetRate - delta;
-    const kcalAdjustment = Math.round((diffRate / 7) * 7700);
-    const absKcal = Math.abs(kcalAdjustment);
-
-    // If deviation is small (< 100 kcal), say On Track
-    if (absKcal < 100) {
-        return { 
-            status: 'ok', 
-            text: 'Trend: On Track', 
-            color: 'text-emerald-500',
-            advice: 'On track. Maintain current calories.'
-        };
-    }
-
-    // Round to nearest 10 for cleaner numbers
-    const displayKcal = Math.round(absKcal / 10) * 10;
-
-    if (kcalAdjustment > 0) {
-        // Need to add calories (Growing too slow or Losing too fast)
-        return { 
-            status: 'slow', 
-            text: 'Trend: Stalling', 
-            color: 'text-amber-500',
-            advice: `Add ~${displayKcal} kcal/day.`
-        };
-    } else {
-        // Need to remove calories (Growing too fast or Stalling on weight loss)
-        return { 
-            status: 'fast', 
-            text: 'Trend: Deviated', 
-            color: 'text-rose-500',
-            advice: `Remove ~${displayKcal} kcal/day.`
-        };
-    }
-  };
-
-  const getAdvice = () => {
-    if (!settings) return null;
-    const targetRate = parseFloat(settings.weeklyRate.toString());
-    const currentRate = currentTrendRate;
-
-    const diffRate = targetRate - currentRate;
-    const kcalAdjustment = Math.round((diffRate / 7) * 7700);
-    const absKcal = Math.abs(kcalAdjustment);
-
-    // Threshold: Only suggest change if off by more than 100 kcal/day
-    if (absKcal < 100) {
-        return { color: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-200', text: 'On track. Maintain current calories.' };
-    }
-
-    const displayKcal = Math.round(absKcal / 10) * 10;
-
-    if (kcalAdjustment > 0) {
-        return { 
-            color: 'bg-amber-500/10 border-amber-500/20 text-amber-200', 
-            text: `Stalling. Add ~${displayKcal} kcal/day.` 
-        };
-    } else {
-        return { 
-            color: 'bg-rose-500/10 border-rose-500/20 text-rose-200', 
-            text: `Deviated. Remove ~${displayKcal} kcal/day.` 
-        };
-    }
-  };
-
-  const baseAdvice = getAdvice();
-  
-  const { showAdvice, showPreWeightPrompt } = useMemo(() => {
-    const res = { showAdvice: false, showPreWeightPrompt: false };
-    
-    if (!baseAdvice || !settings || weeklyData.length === 0) return res;
-    if (weeklyData.length < 1) return res;
-
-    const today = new Date();
-    const isSunday = today.getDay() === 0;
-    
-    const todayStr = today.toISOString().split('T')[0];
-    const hasWeightToday = weights.some(w => w.date === todayStr);
-
-    if (isSunday) {
-        if (!hasWeightToday && !adviceSkippedToday) {
-            return { showAdvice: false, showPreWeightPrompt: true };
-        }
-    }
-
-    const lastSundayWeekKey = getLastSundayWeekKey();
-    if (dismissedAdviceWeeks.includes(lastSundayWeekKey)) return res;
-    
-    const hasDataForWeek = weeklyData.some(w => w.weekId === lastSundayWeekKey);
-    if (!hasDataForWeek) return res;
-
-    return { showAdvice: true, showPreWeightPrompt: false };
-
-  }, [baseAdvice, settings, weeklyData, dismissedAdviceWeeks, weights, adviceSkippedToday]);
-  
-  const advice = showAdvice ? baseAdvice : null;
-  
-  const handleDismissAdvice = async () => {
-    if (!user) return;
-    const lastSundayWeekKey = getLastSundayWeekKey();
-    const updatedWeeks = [...dismissedAdviceWeeks, lastSundayWeekKey];
-    
-    try {
-      // @ts-ignore
-      await setDoc(doc(db, 'users', user.uid, 'settings', 'dismissedAdvice'), {
-        weeks: updatedWeeks,
-        updatedAt: serverTimestamp()
-      });
-    } catch (err) {
-      console.error("Error dismissing advice:", err);
-    }
-  };
-
-  const isDraggingRef = useRef(false);
-  const startYRef = useRef(0);
-  const startHeightRef = useRef(0);
-
-  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
-    setIsDragging(true);
-    isDraggingRef.current = true;
-    startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    startHeightRef.current = chartHeight;
-    
-    document.body.style.userSelect = 'none'; 
-    window.addEventListener('mousemove', handleDragMove);
-    window.addEventListener('mouseup', handleDragEnd);
-    window.addEventListener('touchmove', handleDragMove, { passive: false });
-    window.addEventListener('touchend', handleDragEnd);
-  };
-
-  const handleDragMove = (e: MouseEvent | TouchEvent) => {
-    if (!isDraggingRef.current) return;
-    
-    if (e.cancelable) e.preventDefault();
-    if (e.type === 'touchmove') e.stopImmediatePropagation();
-
-    const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
-    const delta = clientY - startYRef.current;
-    
-    const newHeight = Math.max(HEIGHT_COMPRESSED, Math.min(HEIGHT_EXPANDED, startHeightRef.current + delta));
-    setChartHeight(newHeight);
-  };
-
-  const handleDragEnd = () => {
-    isDraggingRef.current = false;
-    setIsDragging(false);
-    document.body.style.userSelect = '';
-    
-    setChartHeight(prev => {
-        if (prev > SNAP_THRESHOLD) return HEIGHT_EXPANDED;
-        return HEIGHT_COMPRESSED;
-    });
-
-    window.removeEventListener('mousemove', handleDragMove);
-    window.removeEventListener('mouseup', handleDragEnd);
-    window.removeEventListener('touchmove', handleDragMove);
-    window.removeEventListener('touchend', handleDragEnd);
-  };
-
-  const toggleExpand = () => {
-      if (!isDraggingRef.current) {
-          setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
-      }
-  };
-
   const handlePointClick = (point: ChartPoint) => {
-      if (chartMode === 'daily') {
-          const entry = weights.find(w => w.date === point.label);
-          if (entry) {
-              setSelectedEntry(entry);
-          }
-      } else {
-          if (point.actual !== null) {
-              setSelectedEntry({
-                  id: 'weekly-summary-' + point.label,
-                  weight: point.actual,
-                  date: point.weekLabel || point.label, 
-                  createdAt: null
-              });
-          }
+    if (chartMode === 'daily') {
+      const entry = data.weights.find(w => w.date === point.label);
+      if (entry) setSelectedEntry(entry);
+    } else {
+      if (point.actual !== null) {
+        setSelectedEntry({
+          id: 'weekly-summary-' + point.label,
+          weight: point.actual,
+          date: point.weekLabel || point.label,
+          createdAt: null
+        });
       }
+    }
   };
 
-  // --- CHART COMPONENT ---
-  const ChartRenderer = ({ data, mode, height, width, settings, projection }: { data: ChartPoint[], mode: 'weekly' | 'daily', height: number, width: number, settings: SettingsData | null, projection: ProjectionData | null }) => {
-    if (!data || data.length === 0) return (
-      <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{height: height}}>
-        <p className="text-sm">Log data to see trend</p>
-      </div>
-    );
-    
-    const renderWidth = width > 0 ? width : 100;
-    const expanded = height > SNAP_THRESHOLD;
-    const padding = { top: 20, bottom: 24, left: 32, right: 16 };
-
-    const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
-    
-    const validValues = data.flatMap<number>(d => {
-        const vals: number[] = [];
-        if (d.actual !== null) vals.push(d.actual);
-        if (d.trend !== null) vals.push(d.trend);
-        
-        if (projection && settings) {
-            const msPerDay = 86400000;
-            let idealY = 0;
-            
-            if (mode === 'weekly') {
-                const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-                const diffWeeks = Math.round(diffDays / 7);
-                idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
-            } else {
-                const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-                idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-            }
-            
-            vals.push(idealY + tunnelTolerance);
-            vals.push(idealY - tunnelTolerance);
-        }
-        
-        return vals;
-    });
-    
-    const rawMin = Math.min(...validValues);
-    const rawMax = Math.max(...validValues);
-    const rawRange = rawMax - rawMin;
-
-    const effectiveRange = Math.max(rawRange, 0.5);
-    const buffer = effectiveRange * 0.05;
-    const midPoint = (rawMax + rawMin) / 2;
-    
-    const minVal = midPoint - (effectiveRange / 2) - buffer;
-    const maxVal = midPoint + (effectiveRange / 2) + buffer;
-    const range = maxVal - minVal;
-
-    const availableWidth = renderWidth - padding.left - padding.right;
-    const count = data.length;
-    const denominator = count > 1 ? count - 1 : 1;
-    
-    const getX = (i: number) => padding.left + (i / denominator) * availableWidth;
-    const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
-    const axisLineY = height - padding.bottom;
-    const clampToAxis = (val: number) => Math.min(val, axisLineY);
-
-    const gridCount = 5;
-    const computeNiceStep = (targetStep: number) => {
-        if (targetStep <= 0) return 0.1;
-        const exponent = Math.floor(Math.log10(targetStep));
-        const base = Math.pow(10, exponent);
-        const candidates = [1, 2, 2.5, 5, 10];
-        for (const mult of candidates) {
-            const step = mult * base;
-            if (targetStep <= step) return step;
-        }
-        return 10 * base;
-    };
-    const desiredStep = range / (gridCount - 1);
-    const niceStep = computeNiceStep(desiredStep);
-    const gridMin = Math.floor(minVal / niceStep) * niceStep;
-    const gridMax = Math.ceil(maxVal / niceStep) * niceStep;
-    const gridStops: number[] = [];
-    for (let val = gridMin; val <= gridMax + niceStep / 2; val += niceStep) {
-        gridStops.push(parseFloat(val.toFixed(3)));
-    }
-
-    const stops = useMemo(() => {
-        if (data.length < 2 || !settings) return [];
-        
-        const stopList: React.ReactElement[] = [];
-
-        for (let i = 0; i < data.length - 1; i++) {
-             const startPoint = data[i];
-             const endPoint = data[i+1];
-             
-             if (startPoint.trend === null || endPoint.trend === null) continue;
-             
-             let diff: number;
-             
-             if (mode === 'weekly') {
-                const currentSlope = endPoint.trend - startPoint.trend;
-                const targetSlope = settings.weeklyRate; 
-                diff = Math.abs(currentSlope - targetSlope);
-             } else {
-                const dailySlope = endPoint.trend - startPoint.trend;
-                const weeklyEquivalentSlope = dailySlope * 7;
-                diff = Math.abs(weeklyEquivalentSlope - settings.weeklyRate);
-             }
-             
-             const color = interpolateColor(diff);
-             
-             const offsetVal = (i + 0.5) / denominator; 
-             const offsetPercent = offsetVal * 100;
-             
-             if (stopList.length === 0) {
-                 stopList.push(<stop key="start" offset="0%" stopColor={color} />);
-             }
-             
-             stopList.push(<stop key={`mid-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
-             
-             if (i === data.length - 2) {
-                 stopList.push(<stop key="end" offset="100%" stopColor={color} />);
-             }
-        }
-        
-        return stopList;
-    }, [data, settings, mode, denominator]);
-
-    let trendPath = '';
-    if (count > 1) {
-        let lastValidT = -1;
-        data.forEach((d, i) => {
-            if (d.trend === null) return;
-            const x = getX(i);
-            const y = getY(d.trend);
-            if (lastValidT === -1) trendPath += `M ${x},${y} `;
-            else trendPath += `L ${x},${y} `; 
-            lastValidT = i;
-        });
-    }
-
-    let projectionPath = '';
-    let tunnelPath = '';
-    
-    if (projection && data.length > 0) {
-        const msPerDay = 86400000;
-        const upperPoints: [number, number][] = [];
-        const lowerPoints: [number, number][] = [];
-
-        data.forEach((d, i) => {
-             let idealY = 0;
-             const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-
-             if (mode === 'weekly') {
-                const diffWeeks = Math.round(diffDays / 7);
-                idealY = projection.anchorVal + (diffWeeks * projection.weeklySlope);
-             } else {
-                 idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-             }
-             
-             const x = getX(i);
-             const y = getY(idealY);
-             
-             if (i === 0) projectionPath += `M ${x},${y} `;
-             else projectionPath += `L ${x},${y} `;
-             
-             const yUpper = clampToAxis(getY(idealY + tunnelTolerance));
-             const yLower = clampToAxis(getY(idealY - tunnelTolerance));
-             
-             upperPoints.push([x, yUpper]);
-             lowerPoints.push([x, yLower]);
-        });
-        
-        if (upperPoints.length > 0) {
-            tunnelPath = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
-            for (let k = 1; k < upperPoints.length; k++) {
-                tunnelPath += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
-            }
-            for (let k = lowerPoints.length - 1; k >= 0; k--) {
-                tunnelPath += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
-            }
-            tunnelPath += ' Z';
-        }
-    }
-
-    const minLabelSpacing = 35; 
-    let lastRenderedX = -999;
-    const lastPointX = getX(data.length - 1);
-
-    return (
-      <div 
-        className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`} 
-        style={{height: height}}
-      >
-        <svg width="100%" height="100%" viewBox={`0 0 ${renderWidth} ${height}`} className="block">
-          
-          <defs>
-              {stops.length > 0 && (
-                  <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
-                     {stops}
-                  </linearGradient>
-              )}
-          </defs>
-
-          {/* GRID & AXIS */}
-          {gridStops.map((val, idx) => (
-             <g key={idx}>
-               <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
-               <text x={padding.left - 6} y={getY(val) + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
-             </g>
-          ))}
-          
-          <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
-          <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
-
-          {/* TUNNEL */}
-          {tunnelPath && (
-              <path d={tunnelPath} fill="#10b981" opacity="0.1" stroke="none" />
-          )}
-
-          {/* PROJECTION */}
-          {projectionPath && (
-              <path d={projectionPath} fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />
-          )}
-
-          {/* TREND LINE */}
-          {count > 1 && (
-             <path 
-               d={trendPath} 
-               fill="none" 
-               stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"} 
-               strokeWidth={expanded ? "3" : "2"} 
-               strokeLinecap="round" 
-               strokeLinejoin="round" 
-             />
-          )}
-
-          {/* DATA POINTS */}
-          {data.map((d, i) => {
-             if (d.actual === null) return null;
-             const px = getX(i);
-             const py = getY(d.actual);
-             
-             return (
-                <g key={i} onClick={() => handlePointClick(d)} className="cursor-pointer">
-                    <circle cx={px} cy={py} r={10} fill="transparent" />
-                    <circle 
-                        cx={px} 
-                        cy={py} 
-                        r={expanded ? 3.5 : 2} 
-                        fill="#10b981" 
-                        opacity={expanded ? "0.9" : "0.6"}
-                    />
-                    {expanded && (
-                        <text x={px} y={py - 12} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
-                            {d.actual.toFixed(1)}
-                        </text>
-                    )}
-                </g>
-             );
-          })}
-
-          {/* LABELS */}
-          {data.map((d, i) => {
-             const xPos = getX(i);
-             const isFirst = i === 0;
-             const isLast = i === data.length - 1;
-             let shouldRender = false;
-             let anchor: "start" | "middle" | "end" = "middle";
-
-             if (isFirst) { shouldRender = true; anchor = "start"; }
-             else if (isLast) { shouldRender = true; anchor = "end"; }
-             else {
-                 const distToLast = lastPointX - xPos;
-                 const distToPrev = xPos - lastRenderedX;
-                 if (distToLast > minLabelSpacing && distToPrev > minLabelSpacing) {
-                     shouldRender = true;
-                 }
-             }
-
-             if (!shouldRender) return null;
-             lastRenderedX = xPos;
-
-             return (
-                <text key={i} x={xPos} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
-                    {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
-                </text>
-             );
-          })}
-        </svg>
-      </div>
-    );
-  };
-
-  if (loading) return (
-    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 flex items-center justify-center z-50">
-        <div className="text-blue-500 animate-pulse font-bold text-lg flex items-center gap-3">
-            <Activity size={24} /> Loading RateTracker...
-        </div>
-    </div>
-  );
-
-  if (!user) return (
-    <div className="fixed inset-0 w-full h-[100dvh] bg-slate-950 grid place-items-center p-6 overflow-hidden overscroll-none">
-        <div className="fixed inset-0 bg-slate-950 -z-10" />
-        <div className="max-w-xs text-center w-full">
-            <Activity size={48} className="text-blue-500 mx-auto mb-4" />
-            <h1 className="text-3xl font-bold text-white mb-2">RateTracker</h1>
-            <p className="text-slate-400">Track your progress securely.</p>
-            <div className="mt-8">
-                <button onClick={handleGoogleLogin} className="bg-white text-slate-900 px-6 py-3 rounded-xl font-bold flex items-center gap-3 hover:bg-slate-200 transition-colors w-full justify-center">
-                    <LogIn size={20} /> Sign in with Google
-                </button>
-            </div>
-        </div>
-    </div>
-  );
+  // --- Routing ---
+  if (loading) return <LoadingScreen />;
+  if (!user) return <LoginScreen onLogin={handleGoogleLogin} />;
 
   return (
     <div className="fixed inset-0 h-[100dvh] w-full bg-slate-950 text-slate-100 font-sans flex flex-col overflow-hidden overscroll-none">
-      
-      {/* HEADER */}
-      <div className="bg-slate-900/80 backdrop-blur-md px-4 py-4 shadow-sm shrink-0 flex justify-between items-center max-w-md mx-auto w-full border-b border-slate-800 z-10">
-        <div className="flex items-center gap-2 text-blue-500 font-bold">RateTracker</div>
-        <div className="flex gap-2">
-            <button 
-                onClick={() => handleNavigation(view === 'settings' ? 'dashboard' : 'settings')} 
-                className="p-2 hover:bg-slate-800 rounded-full transition-colors"
-            >
-                <Settings size={20} className={view === 'settings' ? "text-blue-400" : "text-slate-400"} />
-            </button>
-            <button onClick={handleLogout} className="p-2 hover:bg-slate-800 rounded-full transition-colors text-red-400">
-                <LogOut size={20} />
-            </button>
-        </div>
-      </div>
+      <AppHeader
+        view={data.view}
+        onToggleView={() => data.handleNavigation(data.view === 'settings' ? 'dashboard' : 'settings')}
+        onLogout={handleLogout}
+      />
 
       <div className="flex-1 overflow-y-auto w-full relative">
-        <div className={`max-w-md mx-auto p-4 ${view === 'settings' ? 'h-full flex flex-col' : 'space-y-5'}`}>
-            
-            {view === 'dashboard' && (
+        <div className={`max-w-md mx-auto p-4 ${data.view === 'settings' ? 'h-full flex flex-col' : 'space-y-5'}`}>
+
+          {data.view === 'dashboard' && (
             <>
-                <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Trend Weight</p>
-                        <p className="text-2xl font-bold text-white truncate">
-                        {weeklyData.length > 0 ? weeklyData[weeklyData.length-1].actual.toFixed(1) : '--'} 
-                        <span className="text-sm font-normal text-slate-500 ml-1">kg</span>
-                        </p>
-                    </div>
-                    <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
-                        <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Rate</p>
-                        <div className={`flex items-center gap-1 text-lg font-bold truncate ${getRateAdherenceColor(currentTrendRate)}`}>
-                        {currentTrendRate > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                        {Math.abs(currentTrendRate).toFixed(2)} kg
-                        </div>
-                    </div>
-                </div>
+              <StatCards weeklyData={weeklyData} currentTrendRate={currentTrendRate} settings={data.settings} />
 
-                {/* ADVICE SECTION - REPLACED BY PROMPT IF SUNDAY & NO WEIGHT */}
-                {showPreWeightPrompt && (
-                    <div className="px-4 py-3 rounded-xl border flex items-center gap-3 bg-blue-500/10 border-blue-500/20 text-blue-200 relative">
-                        <Utensils size={18} className="shrink-0" />
-                        <span className="text-sm font-semibold flex-1">Add today's weight to receive this week's advice.</span>
-                        <button
-                            onClick={() => setAdviceSkippedToday(true)}
-                            className="shrink-0 px-2 py-1 bg-blue-500/20 hover:bg-blue-500/30 rounded text-xs font-bold transition-colors flex items-center gap-1"
-                        >
-                            Skip <SkipForward size={12} />
-                        </button>
-                    </div>
-                )}
+              <AdviceBanner
+                showPreWeightPrompt={showPreWeightPrompt}
+                advice={advice}
+                onSkip={() => setAdviceSkippedToday(true)}
+                onDismiss={data.handleDismissAdvice}
+              />
 
-                {advice && !showPreWeightPrompt && (
-                    <div className={`px-4 py-3 rounded-xl border flex items-center gap-3 ${advice.color} relative`}>
-                        <Utensils size={18} className="shrink-0" />
-                        <span className="text-sm font-semibold flex-1">{advice.text}</span>
-                        <button
-                            onClick={handleDismissAdvice}
-                            className="shrink-0 p-1.5 hover:bg-white/10 rounded-lg transition-colors flex items-center justify-center"
-                            aria-label="Dismiss advice"
-                        >
-                            <Check size={16} className="opacity-70 hover:opacity-100" />
-                        </button>
-                    </div>
-                )}
+              <ChartSection
+                finalChartData={finalChartData}
+                chartMode={chartMode}
+                setChartMode={setChartMode}
+                filterRange={filterRange}
+                setFilterRange={setFilterRange}
+                chartHeight={chartHeight}
+                containerWidth={containerWidth}
+                containerRef={containerRef}
+                settings={data.settings}
+                projectionData={projectionData}
+                isDragging={isDragging}
+                showExplanation={showExplanation}
+                setShowExplanation={setShowExplanation}
+                handleDragStart={handleDragStart}
+                toggleExpand={toggleExpand}
+                onPointClick={handlePointClick}
+              />
 
-                <section className="flex flex-col" ref={containerRef}>
-                    <div className="flex justify-between items-end mb-2 px-1 gap-1">
-                        <div className="shrink-0">
-                            <div className="flex items-center gap-1">
-                                <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-                                <button 
-                                    onClick={() => setShowExplanation(!showExplanation)}
-                                    className="text-slate-500 hover:text-blue-400 transition-colors"
-                                >
-                                    <Info size={13} />
-                                </button>
-                            </div>
-                        </div>
-                        
-                        <div className="flex gap-1 shrink-0">
-                             <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
-                                <button onClick={() => setFilterRange('1M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
-                                <button onClick={() => setFilterRange('3M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
-                                <button onClick={() => setFilterRange('ALL')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
-                            </div>
-                            
-                            <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
-                                <button onClick={() => setChartMode('weekly')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
-                                <button onClick={() => setChartMode('daily')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
-                            </div>
-                        </div>
-                    </div>
+              <LogWeightForm
+                weightInput={data.weightInput}
+                setWeightInput={data.setWeightInput}
+                dateInput={data.dateInput}
+                setDateInput={data.setDateInput}
+                commentInput={data.commentInput}
+                setCommentInput={data.setCommentInput}
+                onSubmit={data.handleAddWeight}
+              />
 
-                    <ChartRenderer data={finalChartData} mode={chartMode} height={chartHeight} width={containerWidth} settings={settings} projection={projectionData} />
-                    
-                    <div 
-                        className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none" 
-                        style={{ touchAction: 'none' }} 
-                    >
-                        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-5/6 mx-auto">
-                            <div className="flex items-center justify-center gap-1">
-                                <div className="w-3 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500 rounded-full"></div>Trend
-                            </div>
-                            <div className="flex items-center justify-center gap-1">
-                                <div className="w-3 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
-                                Tunnel
-                            </div>
-                            <div className="flex items-center justify-center gap-1">
-                                <div className="w-2 h-2 rounded-full bg-emerald-500"></div>Readings
-                            </div>
-                        </div>
-
-                        {showExplanation && (
-                            <div className="bg-slate-950/50 p-3 rounded-lg border border-slate-800 text-xs text-slate-400 animate-in slide-in-from-top-2">
-                                <div className="flex items-center gap-2 text-slate-200 font-bold mb-1">
-                                    <Info size={12} className="text-blue-500" /> EMA model
-                                </div>
-                                <p>Exponential Moving Average (EMA) smoothes daily fluctuations. <span className="text-emerald-400">Green</span> = optimal pace. <span className="text-amber-400">Orange</span>/<span className="text-red-400">Red</span> = stalling or moving too fast.</p>
-                            </div>
-                        )}
-
-                        <div 
-                            className="h-4 flex items-center justify-center cursor-row-resize active:bg-slate-800 transition-colors rounded-lg"
-                            onMouseDown={handleDragStart}
-                            onTouchStart={handleDragStart}
-                            onClick={toggleExpand}
-                        >
-                            <div className="w-12 h-1 bg-slate-700 rounded-full"></div>
-                        </div>
-                    </div>
-                </section>
-
-                <div className="bg-blue-600 rounded-2xl p-4 text-white shadow-lg shadow-blue-900/20">
-                    <h3 className="font-semibold mb-3 flex items-center gap-2 text-sm"><Plus size={18} /> Log Weight</h3>
-                    <form onSubmit={handleAddWeight} className="flex flex-col gap-3">
-                        <div className="flex gap-2">
-                            <input 
-                                type="text" inputMode="decimal" placeholder="0.0" required 
-                                className="flex-1 w-full bg-white/10 border border-white/20 rounded-xl px-4 py-3 text-white placeholder:text-blue-200 focus:outline-none focus:ring-2 focus:ring-white/50 font-bold text-xl" 
-                                value={weightInput} 
-                                onChange={(e) => setWeightInput(e.target.value.replace(',', '.'))}
-                            />
-                            <button type="submit" className="bg-white text-blue-600 font-bold px-6 rounded-xl hover:bg-blue-50 transition-colors text-lg">Add</button>
-                        </div>
-                        <div className="flex gap-2">
-                             <div className="relative flex-1">
-                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><Clock size={16} /></div>
-                                <input type="date" className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 cursor-pointer" value={dateInput} onChange={(e) => setDateInput(e.target.value)} />
-                            </div>
-                             <div className="relative flex-1">
-                                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-200 pointer-events-none"><MessageSquare size={16} /></div>
-                                <input 
-                                    type="text" 
-                                    placeholder="Comment..."
-                                    className="w-full bg-white/10 border border-white/20 rounded-xl pl-10 pr-4 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/50 placeholder:text-blue-200/50" 
-                                    value={commentInput} 
-                                    onChange={(e) => setCommentInput(e.target.value)} 
-                                />
-                            </div>
-                        </div>
-                    </form>
-                </div>
-
-                <section>
-                    <div className="flex items-center justify-between mb-3 px-1 gap-3">
-                        <h2 className="text-sm font-semibold text-slate-300">History</h2>
-                        <button 
-                          type="button"
-                          onClick={handleExportCsv}
-                          className="text-xs font-bold px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors text-white"
-                        >
-                          Export CSV
-                        </button>
-                    </div>
-                    <div className="bg-slate-900 rounded-xl shadow-sm border border-slate-800 overflow-hidden">
-                        <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 bg-slate-950/50 border-b border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-wider">
-                        <div>Week</div>
-                        <div className="text-right">Trend</div>
-                        <div className="text-right pr-4">Δ</div> 
-                        <div className="w-5"></div>
-                        </div>
-                        <div className="divide-y divide-slate-800">
-                        {weeklyData.slice().reverse().map((item) => {
-                            const isExpanded = expandedWeeks.includes(item.weekId);
-                            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta);
-                            return (
-                            <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
-                                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => toggleWeek(item.weekId)}>
-                                <div className="flex flex-col">
-                                    <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
-                                    <span className="text-[10px] text-slate-500">{item.count} entries</span>
-                                </div>
-                                <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
-                                <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
-                                    {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
-                                </div>
-                                <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
-                                </div>
-                                {isExpanded && (() => {
-                                    const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
-                                    return (
-                                <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                                    <div className="flex flex-col gap-2 mb-2">
-                                        <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
-                                            <span>Daily Entries</span>
-                                            <span className={trendStatus.color}>{trendStatus.text}</span>
-                                        </div>
-                                        <div className="text-[10px] text-slate-400">
-                                            {trendStatus.advice}
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                    {item.entries.slice().reverse().map((entry) => (
-                                        <div 
-                                            key={entry.id} 
-                                            className="flex justify-between items-center text-sm p-1 rounded hover:bg-slate-800 cursor-pointer"
-                                            onClick={() => setSelectedEntry(entry)}
-                                        >
-                                            <div className="flex items-center gap-2 text-slate-500">
-                                                <Calendar size={12} /><span>{formatDate(entry.date)}</span>
-                                                {entry.comment && <MessageSquare size={12} className="text-blue-400" />}
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                                                <button 
-                                                    onClick={(e) => { e.stopPropagation(); setDeleteConfirmationId(entry.id); }} 
-                                                    className="text-slate-600 hover:text-red-400 p-1"
-                                                >
-                                                    <Trash2 size={12} />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
-                                    </div>
-                                </div>
-                                    );
-                                })()}
-                            </div>
-                            );
-                        })}
-                        </div>
-                    </div>
-                </section>
+              <WeeklyHistory
+                weeklyData={weeklyData}
+                settings={data.settings}
+                expandedWeeks={expandedWeeks}
+                onToggleWeek={toggleWeek}
+                onExportCsv={() => data.handleExportCsv(weeklyData, trendMap)}
+                onSelectEntry={setSelectedEntry}
+                onDeleteEntry={data.setDeleteConfirmationId}
+              />
             </>
-            )}
+          )}
 
-            {view === 'settings' && (
-            <div className="flex flex-col h-full">
-                <div className="flex items-center gap-2 mb-4 shrink-0">
-                    <button onClick={() => handleNavigation('dashboard')} className="p-2 hover:bg-slate-800 rounded-lg transition-colors">
-                        <ChevronRight className="rotate-180 text-slate-400" size={20} />
-                    </button>
-                    <h2 className="font-bold text-lg text-white">Plan Settings</h2>
-                </div>
-
-                <form onSubmit={handleSaveSettings} className="bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-800 space-y-6 flex-1 flex flex-col">
-                    <div className="flex bg-slate-800 p-1 rounded-xl mb-2">
-                        <button 
-                            type="button"
-                            onClick={() => setGoalType('gain')}
-                            className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'gain' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
-                        >
-                            Gain Weight (+)
-                        </button>
-                        <button 
-                            type="button"
-                            onClick={() => setGoalType('lose')}
-                            className={`flex-1 py-3 rounded-lg text-sm font-bold transition-all ${goalType === 'lose' ? 'bg-slate-600 text-white shadow-sm' : 'text-slate-400'}`}
-                        >
-                            Lose Weight (-)
-                        </button>
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Weekly Rate (kg/wk)</label>
-                        <input 
-                            type="text" inputMode="decimal" required 
-                            value={weeklyRate} 
-                            onChange={(e) => handleRateChange(e.target.value, 'weekly')}
-                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
-                            placeholder="0.2"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Monthly Rate (kg/mo)</label>
-                        <input 
-                            type="text" inputMode="decimal" required 
-                            value={monthlyRate} 
-                            onChange={(e) => handleRateChange(e.target.value, 'monthly')}
-                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
-                            placeholder="0.87"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Avg. Daily Intake (kcal)</label>
-                        <input 
-                            type="text" inputMode="numeric" 
-                            value={dailyCalories} 
-                            onChange={(e) => setDailyCalories(e.target.value)}
-                            className="w-full bg-slate-800 border border-slate-700 text-white rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-slate-500 font-bold"
-                            placeholder="e.g. 2500"
-                        />
-                        <p className="text-[10px] text-slate-500 mt-2">
-                            Used to calculate caloric adjustment advice. Leave blank if unknown.
-                        </p>
-                    </div>
-
-                    <div className="pt-4 mt-auto">
-                        <button type="submit" className="w-full bg-white text-slate-900 font-bold py-4 rounded-xl hover:bg-slate-200 transition-colors">
-                            Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
-                        </button>
-                    </div>
-                </form>
-            </div>
-            )}
+          {data.view === 'settings' && (
+            <SettingsView
+              goalType={data.goalType}
+              setGoalType={data.setGoalType}
+              weeklyRate={data.weeklyRate}
+              monthlyRate={data.monthlyRate}
+              dailyCalories={data.dailyCalories}
+              setDailyCalories={data.setDailyCalories}
+              onRateChange={data.handleRateChange}
+              onSave={data.handleSaveSettings}
+              onBack={() => data.handleNavigation('dashboard')}
+            />
+          )}
         </div>
       </div>
 
-      {/* MODALS */}
-      {/* 1. ENTRY DETAILS MODAL */}
+      {/* Modals */}
       {selectedEntry && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm" onClick={() => setSelectedEntry(null)}>
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl relative" onClick={e => e.stopPropagation()}>
-                  <button onClick={() => setSelectedEntry(null)} className="absolute top-4 right-4 text-slate-500 hover:text-white">
-                      <X size={20} />
-                  </button>
-                  
-                  <div className="flex flex-col gap-4">
-                      <div className="text-center border-b border-slate-800 pb-4">
-                          <h3 className="text-3xl font-bold text-white mb-1">{selectedEntry.weight.toFixed(1)} <span className="text-lg text-slate-500 font-normal">kg</span></h3>
-                          <p className="text-slate-400 font-medium flex items-center justify-center gap-2">
-                              {/* If weekly dummy entry, date is just the string label */}
-                              {selectedEntry.id.startsWith('weekly') ? selectedEntry.date : formatDate(selectedEntry.date)}
-                          </p>
-                      </div>
-                      
-                      {/* Only show these details if it's NOT a weekly summary dummy entry */}
-                      {!selectedEntry.id.startsWith('weekly') && (
-                          <>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
-                                    <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                                        <Clock size={14} className="text-blue-500" />
-                                        {formatTime(selectedEntry.createdAt) || '--:--'}
-                                    </p>
-                                </div>
-                                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Date</p>
-                                    <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                                        <Calendar size={14} className="text-blue-500" />
-                                        {formatDate(selectedEntry.date)}
-                                    </p>
-                                </div>
-                            </div>
-
-                            {selectedEntry.comment && (
-                                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
-                                    <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
-                                        <MessageSquare size={12} /> Comment
-                                    </p>
-                                    <p className="text-sm text-slate-200 italic">"{selectedEntry.comment}"</p>
-                                </div>
-                            )}
-                          </>
-                      )}
-                      
-                      {selectedEntry.id.startsWith('weekly') && (
-                          <div className="text-center text-sm text-slate-500 italic">
-                              Weekly Average
-                          </div>
-                      )}
-                  </div>
-              </div>
-          </div>
+        <EntryDetailModal entry={selectedEntry} onClose={() => setSelectedEntry(null)} />
       )}
 
-      {/* 2. DELETE CONFIRMATION MODAL */}
-      {deleteConfirmationId && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-                  <h3 className="text-lg font-bold text-white mb-2">Delete Entry?</h3>
-                  <p className="text-slate-400 text-sm mb-6">Are you sure you want to delete this weight log? This action cannot be undone.</p>
-                  <div className="flex gap-3">
-                      <button 
-                          onClick={() => setDeleteConfirmationId(null)}
-                          className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold transition-colors"
-                      >
-                          No
-                      </button>
-                      <button 
-                          onClick={handleDeleteEntry}
-                          className="flex-1 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/50 rounded-xl font-bold transition-colors"
-                      >
-                          Yes
-                      </button>
-                  </div>
-              </div>
-          </div>
+      {data.deleteConfirmationId && (
+        <DeleteConfirmModal
+          onConfirm={data.handleDeleteEntry}
+          onCancel={() => data.setDeleteConfirmationId(null)}
+        />
       )}
-      
     </div>
   );
 }
