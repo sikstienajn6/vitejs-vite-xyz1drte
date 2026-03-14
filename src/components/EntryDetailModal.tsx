@@ -1,4 +1,4 @@
-import { X, Clock, Calendar, MessageSquare } from 'lucide-react';
+import { X, Clock, MessageSquare } from 'lucide-react';
 import type { WeightEntry } from '../lib/types';
 import { formatDate, formatTime } from '../lib/utils';
 
@@ -25,19 +25,12 @@ export function EntryDetailModal({ entry, onClose }: EntryDetailModalProps) {
 
           {!entry.id.startsWith('weekly') && (
             <>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4">
                 <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
                   <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
                   <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
                     <Clock size={14} className="text-blue-500" />
                     {formatTime(entry.createdAt) || '--:--'}
-                  </p>
-                </div>
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Date</p>
-                  <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                    <Calendar size={14} className="text-blue-500" />
-                    {formatDate(entry.date)}
                   </p>
                 </div>
               </div>

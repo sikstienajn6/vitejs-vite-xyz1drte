@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ChartPoint, WeightEntry } from './lib/types';
+import type { WeightEntry } from './lib/types';
 
 import { useAuth } from './hooks/useAuth';
 import { useWeightData } from './hooks/useWeightData';
@@ -53,22 +53,6 @@ export default function App() {
     );
   };
 
-  const handlePointClick = (point: ChartPoint) => {
-    if (chartMode === 'daily') {
-      const entry = data.weights.find(w => w.date === point.label);
-      if (entry) setSelectedEntry(entry);
-    } else {
-      if (point.actual !== null) {
-        setSelectedEntry({
-          id: 'weekly-summary-' + point.label,
-          weight: point.actual,
-          date: point.weekLabel || point.label,
-          createdAt: null
-        });
-      }
-    }
-  };
-
   // --- Routing ---
   if (loading) return <LoadingScreen />;
   if (!user) return <LoginScreen onLogin={handleGoogleLogin} />;
@@ -111,7 +95,6 @@ export default function App() {
                 setShowExplanation={setShowExplanation}
                 handleDragStart={handleDragStart}
                 toggleExpand={toggleExpand}
-                onPointClick={handlePointClick}
               />
 
               <LogWeightForm

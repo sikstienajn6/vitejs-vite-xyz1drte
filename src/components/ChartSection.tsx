@@ -19,7 +19,6 @@ interface ChartSectionProps {
   setShowExplanation: (show: boolean) => void;
   handleDragStart: (e: React.MouseEvent | React.TouchEvent) => void;
   toggleExpand: () => void;
-  onPointClick: (point: ChartPoint) => void;
 }
 
 export function ChartSection({
@@ -38,7 +37,6 @@ export function ChartSection({
   setShowExplanation,
   handleDragStart,
   toggleExpand,
-  onPointClick,
 }: ChartSectionProps) {
   return (
     <section className="flex flex-col" ref={containerRef}>
@@ -77,7 +75,6 @@ export function ChartSection({
         settings={settings}
         projection={projectionData}
         isDragging={isDragging}
-        onPointClick={onPointClick}
       />
 
       <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none">

@@ -11,10 +11,9 @@ interface ChartRendererProps {
   settings: SettingsData | null;
   projection: ProjectionData | null;
   isDragging: boolean;
-  onPointClick: (point: ChartPoint) => void;
 }
 
-export function ChartRenderer({ data, mode, height, width, settings, projection, isDragging, onPointClick }: ChartRendererProps) {
+export function ChartRenderer({ data, mode, height, width, settings, projection, isDragging }: ChartRendererProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -55,11 +54,8 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   }, [activeIndex, findNearestIndex]);
 
   const handleInteractionEnd = useCallback(() => {
-    if (activeIndex !== null && data[activeIndex]) {
-      onPointClick(data[activeIndex]);
-    }
     setActiveIndex(null);
-  }, [activeIndex, data, onPointClick]);
+  }, []);
 
   const stops = useMemo(() => {
     if (data.length < 2 || !settings) return [];
