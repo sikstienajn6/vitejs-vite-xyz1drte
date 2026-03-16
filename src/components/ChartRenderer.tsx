@@ -345,7 +345,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   return (
     <div
-      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]'}`}
+      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-[height] duration-300 ease-out'}`}
       style={{ height: height }}
     >
       <svg
@@ -436,8 +436,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
               if (px - lastRenderedX > minLabelSpacing) {
                 lastRenderedX = px;
+                
+                // Adjust text anchor if too close to edges to prevent cutoff
+                let anchor: "middle" | "start" | "end" = "middle";
+                if (px < padding.left + 15) anchor = "start";
+                else if (px > renderWidth - padding.right - 15) anchor = "end";
+
                 return (
-                  <text key={idx} x={px} y={height - 6} fontSize="9" fill="#64748b" textAnchor="middle" fontWeight="bold">
+                  <text key={idx} x={px} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
                     {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                   </text>
                 );
@@ -473,25 +479,29 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 const tooltipText = `${tooltipWeight} kg · ${tooltipDate}`;
                 const baseWidth = tooltipText.length * 5.5 + 16;
                 const totalWidth = onSelectEntry ? baseWidth + 16 : baseWidth; // +16 for the > icon
-                const tooltipHeight = 24; // slightly taller for better clickability
+                const tooltipHeight = 28; // slightly taller for better clickability
 
                 let tooltipX = activeXPos - totalWidth / 2;
                 if (tooltipX < padding.left) tooltipX = padding.left;
                 if (tooltipX + totalWidth > renderWidth - padding.right) {
                   tooltipX = renderWidth - padding.right - totalWidth;
                 }
-                const tooltipY = padding.top - 4;
+                
+                // Place tooltip exactly at the top of the SVG canvas to avoid being cut off by padding
+                const tooltipY = Math.max(0, padding.top - tooltipHeight - 4); 
 
                 return (
                   <g
                     style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
                     onClick={(e) => { e.stopPropagation(); handleTooltipClick(); }}
+                    onTouchStart={(e) => e.stopPropagation()} // Stop chart from panning
+                    onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); handleTooltipClick(); }}
                     className="group" // allows for hover styles if we use css over svg properties, but standard svg is more cross-platform
                   >
                     {/* Shadow/Backdrop */}
                     <rect
                       x={tooltipX}
-                      y={tooltipY - tooltipHeight + 4}
+                      y={tooltipY}
                       width={totalWidth}
                       height={tooltipHeight}
                       rx="6"
@@ -502,7 +512,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                     />
                     <text
                       x={tooltipX + (onSelectEntry ? 8 : totalWidth / 2)}
-                      y={tooltipY - tooltipHeight / 2 + 8}
+                      y={tooltipY + 18}
                       fontSize="10"
                       fill="#f8fafc" // clean white text instead of blue
                       textAnchor={onSelectEntry ? "start" : "middle"}
@@ -515,7 +525,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                     {onSelectEntry && (
                       <path
                         d="M0 0 L4 4 L0 8"
-                        transform={`translate(${tooltipX + totalWidth - 14}, ${tooltipY - tooltipHeight / 2 + 4})`}
+                        transform={`translate(${tooltipX + totalWidth - 14}, ${tooltipY + 10})`}
                         fill="none"
                         stroke="#94a3b8"
                         strokeWidth="1.5"
