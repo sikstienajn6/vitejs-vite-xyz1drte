@@ -226,11 +226,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     return stopList;
   }, [visibleData, settings, mode, getX, availableWidth, padding.left, visibleDataIndices.start]);
 
-  if (!allData || allData.length === 0) return (
-    <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{ height: height }}>
-      <p className="text-sm">Log data to see trend</p>
-    </div>
-  );
+
 
   const expanded = height > SNAP_THRESHOLD;
   const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
@@ -263,6 +259,13 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const range = maxVal - minVal;
 
   const getY = useCallback((val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom), [height, padding.bottom, padding.top, minVal, range]);
+
+  if (!allData || allData.length === 0) return (
+    <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{ height: height }}>
+      <p className="text-sm">Log data to see trend</p>
+    </div>
+  );
+  
   
   const axisLineY = height - padding.bottom;
   const clampToAxis = (val: number) => Math.min(val, axisLineY);
