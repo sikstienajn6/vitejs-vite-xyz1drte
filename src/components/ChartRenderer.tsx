@@ -2,7 +2,6 @@ import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react'
 import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
 import { SNAP_THRESHOLD, WEEKLY_TUNNEL_WIDTH, DAILY_TUNNEL_WIDTH } from '../lib/constants';
 import { interpolateColor, formatDate } from '../lib/utils';
-import { ChevronRight } from 'lucide-react';
 
 interface ChartRendererProps {
   data: ChartPoint[]; // ignored now, we use allData
@@ -37,7 +36,6 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   // Instead of fixed counts, we can count how many points are in the default window.
   const defaultWindowSize = useMemo(() => {
     if (allData.length === 0) return 0;
-    const now = new Date();
     const latestDate = allData[allData.length - 1].dateObj;
     let startDate = new Date(latestDate);
     if (filterRange === '1M') startDate.setMonth(latestDate.getMonth() - 1);
@@ -196,7 +194,6 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     // The gradient runs across the entire availableWidth.
     // For fractional offset, we have to map points correctly, or just use visibleData roughly.
     // Given the gradient is just color blending, mapping roughly to screen % is fine.
-    const screenRange = visibleDataIndices.end - visibleDataIndices.start;
 
     for (let i = 0; i < visibleData.length - 1; i++) {
       const startPoint = visibleData[i];
