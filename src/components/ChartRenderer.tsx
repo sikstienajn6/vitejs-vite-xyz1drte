@@ -2,9 +2,10 @@ import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react'
 import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
 import { SNAP_THRESHOLD, WEEKLY_TUNNEL_WIDTH, DAILY_TUNNEL_WIDTH } from '../lib/constants';
 import { interpolateColor, formatDate } from '../lib/utils';
+import { ChevronRight } from 'lucide-react';
 
 interface ChartRendererProps {
-  data: ChartPoint[];
+  data: ChartPoint[]; // ignored now, we use allData
   allData: ChartPoint[];
   mode: 'weekly' | 'daily';
   filterRange: '1M' | '3M' | 'ALL';
@@ -16,156 +17,159 @@ interface ChartRendererProps {
   onSelectEntry?: (entry: WeightEntry) => void;
 }
 
-export function ChartRenderer({ data, allData, mode, filterRange, height, width, settings, projection, isDragging, onSelectEntry }: ChartRendererProps) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [viewOffset, setViewOffset] = useState(0);  // panning offset: how many points scrolled left from end
+export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projection, isDragging, onSelectEntry }: ChartRendererProps) {
+  const [activeDateStr, setActiveDateStr] = useState<string | null>(null);
+  const [viewOffset, setViewOffset] = useState<number>(0);  // float offset from the right edge
+
   const svgRef = useRef<SVGSVGElement>(null);
 
   // Touch tracking refs
+  const lastTouchXRef = useRef(0);
+  const lastTouchYRef = useRef(0);
   const touchStartXRef = useRef(0);
   const touchStartYRef = useRef(0);
+  const touchStartTimeRef = useRef(0);
   const isSwiping = useRef(false);
   const gestureDecided = useRef(false);
-  const panAccumulatorRef = useRef(0);
 
-  // Default window size = how many points the filter range shows
-  const defaultWindowSize = data.length;
+  // Default window size based on filterRange. We approximate 1M ≈ 30, 3M ≈ 90, ALL = allData.length
+  // But wait, the previous logic used actual date filtering.
+  // Instead of fixed counts, we can count how many points are in the default window.
+  const defaultWindowSize = useMemo(() => {
+    if (allData.length === 0) return 0;
+    const now = new Date();
+    const latestDate = allData[allData.length - 1].dateObj;
+    let startDate = new Date(latestDate);
+    if (filterRange === '1M') startDate.setMonth(latestDate.getMonth() - 1);
+    else if (filterRange === '3M') startDate.setMonth(latestDate.getMonth() - 3);
+    else return allData.length;
 
-  // Reset viewOffset when filterRange changes (user clicks 1M/3M/ALL)
+    let count = 0;
+    for (let i = allData.length - 1; i >= 0; i--) {
+      if (allData[i].dateObj >= startDate) count++;
+      else break;
+    }
+    return Math.max(count, 5); // At least 5 points
+  }, [allData, filterRange]);
+
+  // Reset viewOffset when filterRange changes
   useEffect(() => {
     setViewOffset(0);
-    setActiveIndex(null);
+    setActiveDateStr(null);
   }, [filterRange]);
 
-  // Compute visible data slice from allData
-  const visibleData = useMemo(() => {
-    if (allData.length === 0) return [];
-    const windowSize = Math.max(defaultWindowSize, 2);
-    const endIdx = allData.length - viewOffset;
-    const startIdx = Math.max(0, endIdx - windowSize);
-    return allData.slice(startIdx, endIdx);
-  }, [allData, defaultWindowSize, viewOffset]);
+  const N = allData.length;
+  const W = Math.max(2, defaultWindowSize);
+  const maxOffset = Math.max(0, N - W);
+  const clampedOffset = Math.max(0, Math.min(maxOffset, viewOffset));
 
-  const denominator = visibleData.length > 1 ? visibleData.length - 1 : 1;
+  const currLeft = Math.max(0, N - W - clampedOffset);
+  const currRight = currLeft + (W - 1);
+
   const renderWidth = width > 0 ? width : 100;
   const padding = { top: 20, bottom: 24, left: 32, right: 16 };
   const availableWidth = renderWidth - padding.left - padding.right;
-  const getX = useCallback((i: number) => padding.left + (i / denominator) * availableWidth, [padding.left, denominator, availableWidth]);
+  const pxPerPoint = availableWidth / Math.max(1, W - 1);
 
-  const findNearestIndex = useCallback((clientX: number) => {
+  const getX = useCallback((i: number) => padding.left + (i - currLeft) * pxPerPoint, [currLeft, pxPerPoint, padding.left]);
+
+  // Visible data slice for rendering and Y-axis min/max
+  const visibleDataIndices = useMemo(() => {
+    const start = Math.max(0, Math.floor(currLeft));
+    const end = Math.min(N, Math.ceil(currRight) + 1);
+    return { start, end };
+  }, [currLeft, currRight, N]);
+
+  const visibleData = allData.slice(visibleDataIndices.start, visibleDataIndices.end);
+
+  const findNearestDateStr = useCallback((clientX: number) => {
     if (!svgRef.current || visibleData.length === 0) return null;
     const rect = svgRef.current.getBoundingClientRect();
     const svgX = ((clientX - rect.left) / rect.width) * renderWidth;
 
-    let closestIdx = 0;
+    let closestLabel: string | null = null;
     let closestDist = Infinity;
-    for (let i = 0; i < visibleData.length; i++) {
+
+    for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
       const dist = Math.abs(getX(i) - svgX);
       if (dist < closestDist) {
         closestDist = dist;
-        closestIdx = i;
+        closestLabel = allData[i].label;
       }
     }
-    return closestIdx;
-  }, [visibleData, renderWidth, getX]);
+    return closestLabel;
+  }, [allData, visibleData.length, visibleDataIndices, renderWidth, getX]);
 
-  // --- Touch interaction: distinguish tap vs horizontal swipe ---
+  // --- Touch interaction ---
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
+    lastTouchXRef.current = touch.clientX;
+    lastTouchYRef.current = touch.clientY;
     touchStartXRef.current = touch.clientX;
     touchStartYRef.current = touch.clientY;
+    touchStartTimeRef.current = Date.now();
     isSwiping.current = false;
     gestureDecided.current = false;
-    panAccumulatorRef.current = 0;
   }, []);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
-    const dx = touch.clientX - touchStartXRef.current;
-    const dy = touch.clientY - touchStartYRef.current;
-
-    // First move: decide if this is a horizontal swipe or vertical scroll
+    const dx = touch.clientX - lastTouchXRef.current;
+    
     if (!gestureDecided.current) {
-      if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return; // not enough movement
+      const totalDx = Math.abs(touch.clientX - touchStartXRef.current);
+      const totalDy = Math.abs(touch.clientY - touchStartYRef.current);
+      if (totalDx < 5 && totalDy < 5) return;
       gestureDecided.current = true;
-      if (Math.abs(dx) > Math.abs(dy)) {
+      if (totalDx > totalDy) {
         isSwiping.current = true;
       } else {
         isSwiping.current = false;
-        return; // let browser handle vertical scroll
+        return; // vertical scroll
       }
     }
 
     if (!isSwiping.current) return;
-
-    // Prevent scroll while panning
     if (e.cancelable) e.preventDefault();
 
-    // Calculate how many data points to shift per px
-    const pxPerPoint = availableWidth / denominator;
-    panAccumulatorRef.current += -dx; // negative because swipe-left = go earlier = increase offset
-    touchStartXRef.current = touch.clientX;
-    touchStartYRef.current = touch.clientY;
+    const deltaPoints = dx / pxPerPoint;
+    setViewOffset(prev => Math.max(0, Math.min(maxOffset, prev + deltaPoints)));
 
-    const pointsToShift = Math.round(panAccumulatorRef.current / pxPerPoint);
-    if (pointsToShift !== 0) {
-      panAccumulatorRef.current -= pointsToShift * pxPerPoint;
-      setViewOffset(prev => {
-        const maxOffset = Math.max(0, allData.length - defaultWindowSize);
-        return Math.max(0, Math.min(maxOffset, prev + pointsToShift));
-      });
-    }
-  }, [allData.length, defaultWindowSize, availableWidth, denominator]);
+    lastTouchXRef.current = touch.clientX;
+    lastTouchYRef.current = touch.clientY;
+  }, [pxPerPoint, maxOffset]);
 
-  const handleTouchEnd = useCallback(() => {
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!gestureDecided.current || !isSwiping.current) {
-      // It was a tap — toggle tooltip
-      // Re-use last touch position to find nearest
+      const touchDuration = Date.now() - touchStartTimeRef.current;
+      if (touchDuration < 300) {
+        const clientX = e.changedTouches[0].clientX;
+        const totalDx = Math.abs(clientX - touchStartXRef.current);
+        const totalDy = Math.abs(e.changedTouches[0].clientY - touchStartYRef.current);
+        if (totalDx < 10 && totalDy < 10) {
+          handleTap(clientX);
+        }
+      }
     }
-    // Don't clear activeIndex on touch end — tooltip persists
     isSwiping.current = false;
     gestureDecided.current = false;
-  }, []);
+  }, [touchStartXRef, touchStartYRef, touchStartTimeRef]);
 
-  const handleTap = useCallback((e: React.TouchEvent | React.MouseEvent) => {
-    // For touch: only handle on touchEnd if it was a tap (not a swipe)
-    const clientX = 'changedTouches' in e
-      ? (e as React.TouchEvent).changedTouches[0].clientX
-      : (e as React.MouseEvent).clientX;
+  const handleTap = useCallback((clientX: number) => {
+    const label = findNearestDateStr(clientX);
+    setActiveDateStr(prev => prev === label ? null : label);
+  }, [findNearestDateStr]);
 
-    const dx = 'changedTouches' in e
-      ? Math.abs(clientX - touchStartXRef.current)
-      : 0;
-
-    // If it was a swipe, don't handle as tap
-    if (dx > 10 && 'changedTouches' in e) return;
-
-    const idx = findNearestIndex(clientX);
-    if (idx === activeIndex) {
-      setActiveIndex(null); // toggle off
-    } else {
-      setActiveIndex(idx);
-    }
-  }, [findNearestIndex, activeIndex]);
-
-  // Mouse handlers (for desktop)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    const idx = findNearestIndex(e.clientX);
-    if (idx === activeIndex) {
-      setActiveIndex(null);
-    } else {
-      setActiveIndex(idx);
-    }
-  }, [findNearestIndex, activeIndex]);
+    handleTap(e.clientX);
+  }, [handleTap]);
 
-  // --- Tooltip click handler → open EntryDetailModal ---
   const handleTooltipClick = useCallback(() => {
-    if (activeIndex === null || !onSelectEntry) return;
-    const point = visibleData[activeIndex];
+    if (!activeDateStr || !onSelectEntry) return;
+    const point = allData.find(d => d.label === activeDateStr);
     if (!point) return;
 
     if (mode === 'weekly') {
-      // Synthetic weekly entry
       const entry: WeightEntry = {
         id: `weekly-${point.label}`,
         weight: point.actual ?? point.trend ?? 0,
@@ -174,7 +178,6 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
       };
       onSelectEntry(entry);
     } else {
-      // Daily: create entry
       const entry: WeightEntry = {
         id: `daily-${point.label}`,
         weight: point.actual ?? point.trend ?? 0,
@@ -183,13 +186,17 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
       };
       onSelectEntry(entry);
     }
-  }, [activeIndex, visibleData, mode, onSelectEntry]);
+  }, [activeDateStr, allData, mode, onSelectEntry]);
 
+  // --- Gradients and visual computations ---
   const stops = useMemo(() => {
     if (visibleData.length < 2 || !settings) return [];
-
     const stopList: React.ReactElement[] = [];
-    const denom = visibleData.length > 1 ? visibleData.length - 1 : 1;
+
+    // The gradient runs across the entire availableWidth.
+    // For fractional offset, we have to map points correctly, or just use visibleData roughly.
+    // Given the gradient is just color blending, mapping roughly to screen % is fine.
+    const screenRange = visibleDataIndices.end - visibleDataIndices.start;
 
     for (let i = 0; i < visibleData.length - 1; i++) {
       const startPoint = visibleData[i];
@@ -198,7 +205,6 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
       if (startPoint.trend === null || endPoint.trend === null) continue;
 
       let diff: number;
-
       if (mode === 'weekly') {
         const currentSlope = endPoint.trend - startPoint.trend;
         const targetSlope = settings.weeklyRate;
@@ -210,25 +216,20 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
       }
 
       const color = interpolateColor(diff);
+      const absIndex = visibleDataIndices.start + i;
+      
+      // Calculate where `absIndex + 0.5` falls on the screen as a %
+      const xPixel = getX(absIndex + 0.5) - padding.left;
+      const offsetPercent = Math.max(0, Math.min(100, (xPixel / availableWidth) * 100));
 
-      const offsetVal = (i + 0.5) / denom;
-      const offsetPercent = offsetVal * 100;
-
-      if (stopList.length === 0) {
-        stopList.push(<stop key="start" offset="0%" stopColor={color} />);
-      }
-
+      if (stopList.length === 0) stopList.push(<stop key="start" offset="0%" stopColor={color} />);
       stopList.push(<stop key={`mid-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
-
-      if (i === visibleData.length - 2) {
-        stopList.push(<stop key="end" offset="100%" stopColor={color} />);
-      }
+      if (i === visibleData.length - 2) stopList.push(<stop key="end" offset="100%" stopColor={color} />);
     }
-
     return stopList;
-  }, [visibleData, settings, mode]);
+  }, [visibleData, settings, mode, getX, availableWidth, padding.left, visibleDataIndices.start]);
 
-  if (!visibleData || visibleData.length === 0) return (
+  if (!allData || allData.length === 0) return (
     <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{ height: height }}>
       <p className="text-sm">Log data to see trend</p>
     </div>
@@ -246,11 +247,9 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
       const msPerDay = 86400000;
       const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
       const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-
       vals.push(idealY + tunnelTolerance);
       vals.push(idealY - tunnelTolerance);
     }
-
     return vals;
   });
 
@@ -266,8 +265,8 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
   const maxVal = midPoint + (effectiveRange / 2) + buffer;
   const range = maxVal - minVal;
 
-  const count = visibleData.length;
-  const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
+  const getY = useCallback((val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom), [height, padding.bottom, padding.top, minVal, range]);
+  
   const axisLineY = height - padding.bottom;
   const clampToAxis = (val: number) => Math.min(val, axisLineY);
 
@@ -283,8 +282,7 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
     }
     return 10 * base;
   };
-  const desiredStep = range / (gridCount - 1);
-  const niceStep = computeNiceStep(desiredStep);
+  const niceStep = computeNiceStep(range / (gridCount - 1));
   const gridMin = Math.floor(minVal / niceStep) * niceStep;
   const gridMax = Math.ceil(maxVal / niceStep) * niceStep;
   const gridStops: number[] = [];
@@ -293,16 +291,17 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
   }
 
   let trendPath = '';
-  if (count > 1) {
-    let lastValidT = -1;
-    visibleData.forEach((d, i) => {
-      if (d.trend === null) return;
+  if (visibleData.length > 1) {
+    let lastValidAbs = -1;
+    for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
+      const d = allData[i];
+      if (d.trend === null) continue;
       const x = getX(i);
       const y = getY(d.trend);
-      if (lastValidT === -1) trendPath += `M ${x},${y} `;
+      if (lastValidAbs === -1) trendPath += `M ${x},${y} `;
       else trendPath += `L ${x},${y} `;
-      lastValidT = i;
-    });
+      lastValidAbs = i;
+    }
   }
 
   let projectionPath = '';
@@ -313,44 +312,36 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
     const upperPoints: [number, number][] = [];
     const lowerPoints: [number, number][] = [];
 
-    visibleData.forEach((d, i) => {
+    for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
+      const d = allData[i];
       const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
       const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-
       const x = getX(i);
       const y = getY(idealY);
 
-      if (i === 0) projectionPath += `M ${x},${y} `;
+      if (i === visibleDataIndices.start) projectionPath += `M ${x},${y} `;
       else projectionPath += `L ${x},${y} `;
 
       const yUpper = clampToAxis(getY(idealY + tunnelTolerance));
       const yLower = clampToAxis(getY(idealY - tunnelTolerance));
-
       upperPoints.push([x, yUpper]);
       lowerPoints.push([x, yLower]);
-    });
+    }
 
     if (upperPoints.length > 0) {
       tunnelPath = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
-      for (let k = 1; k < upperPoints.length; k++) {
-        tunnelPath += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
-      }
-      for (let k = lowerPoints.length - 1; k >= 0; k--) {
-        tunnelPath += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
-      }
+      for (let k = 1; k < upperPoints.length; k++) tunnelPath += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
+      for (let k = lowerPoints.length - 1; k >= 0; k--) tunnelPath += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
       tunnelPath += ' Z';
     }
   }
 
-  // --- X-Axis Label Logic ---
-  const minLabelSpacing = 35;
-  const firstLabelExtraWidth = 20;
-  let lastRenderedX = -999;
-  const lastPointX = getX(visibleData.length - 1);
-
-  // --- Interactive Tooltip Logic ---
-  const activePoint = activeIndex !== null ? visibleData[activeIndex] : null;
-  const activeXPos = activeIndex !== null ? getX(activeIndex) : 0;
+  const activeIndex = activeDateStr ? allData.findIndex(d => d.label === activeDateStr) : -1;
+  const activePoint = activeIndex >= 0 ? allData[activeIndex] : null;
+  const activeXPos = activeIndex >= 0 ? getX(activeIndex) : -100;
+  
+  // Only show tooltip if it's within the visible bounds padded slightly
+  const isTooltipVisible = activePoint && activeXPos >= padding.left - 5 && activeXPos <= renderWidth - padding.right + 5;
 
   return (
     <div
@@ -360,19 +351,18 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
       <svg
         ref={svgRef}
         width="100%" height="100%"
+        /* Using viewBox ensures responsive scaling without glitching */
         viewBox={`0 0 ${renderWidth} ${height}`}
         className="block touch-none"
         onMouseDown={handleMouseDown}
-        onMouseLeave={() => {}} // don't clear on leave — tooltip persists
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
-        onTouchEnd={(e) => {
-          handleTouchEnd();
-          handleTap(e);
-        }}
+        onTouchEnd={handleTouchEnd}
       >
-
         <defs>
+          <clipPath id="chartClip">
+            <rect x={padding.left} y={0} width={availableWidth} height={height} />
+          </clipPath>
           {stops.length > 0 && (
             <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
               {stops}
@@ -381,162 +371,165 @@ export function ChartRenderer({ data, allData, mode, filterRange, height, width,
         </defs>
 
         {/* GRID & AXIS */}
-        {gridStops.map((val, idx) => (
-          <g key={idx}>
-            <line x1={padding.left} y1={getY(val)} x2={renderWidth - padding.right} y2={getY(val)} stroke="#1e293b" strokeWidth="1" />
-            <text x={padding.left - 6} y={getY(val) + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
-          </g>
-        ))}
+        {gridStops.map((val, idx) => {
+          const yPos = getY(val);
+          // Clamp grid lines so they don't appear out of bounds during fast resizes
+          if (yPos < padding.top - 5 || yPos > height - padding.bottom + 5) return null;
+          return (
+            <g key={idx}>
+              <line x1={padding.left} y1={yPos} x2={renderWidth - padding.right} y2={yPos} stroke="#1e293b" strokeWidth="1" />
+              <text x={padding.left - 6} y={yPos + 3} fontSize="9" fill="#64748b" textAnchor="end">{val.toFixed(1)}</text>
+            </g>
+          );
+        })}
 
         <line x1={padding.left} y1={padding.top} x2={padding.left} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
         <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
-        {/* TUNNEL */}
-        {tunnelPath && (
-          <path d={tunnelPath} fill="#10b981" opacity="0.1" stroke="none" />
-        )}
+        <g clipPath="url(#chartClip)">
+          {/* TUNNEL */}
+          {tunnelPath && <path d={tunnelPath} fill="#10b981" opacity="0.1" stroke="none" />}
 
-        {/* PROJECTION */}
-        {projectionPath && (
-          <path d={projectionPath} fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />
-        )}
+          {/* PROJECTION */}
+          {projectionPath && <path d={projectionPath} fill="none" stroke="#10b981" strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />}
 
-        {/* TREND LINE */}
-        {count > 1 && (
-          <path
-            d={trendPath}
-            fill="none"
-            stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"}
-            strokeWidth={expanded ? "3" : "2"}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        )}
+          {/* TREND LINE */}
+          {trendPath && (
+            <path
+              d={trendPath}
+              fill="none"
+              stroke={stops.length > 0 ? "url(#trendGradient)" : "#10b981"}
+              strokeWidth={expanded ? "3" : "2"}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          )}
 
-        {/* DATA POINTS */}
-        {visibleData.map((d, i) => {
-          if (d.actual === null) return null;
-          const px = getX(i);
-          const py = getY(d.actual);
-          const isActive = activeIndex === i;
+          {/* DATA POINTS */}
+          {visibleData.map((d) => {
+            if (d.actual === null) return null;
+            const idx = allData.indexOf(d);
+            const px = getX(idx);
+            const py = getY(d.actual);
+            const isActive = activeDateStr === d.label;
 
-          return (
-            <g key={i}>
+            return (
               <circle
+                key={idx}
                 cx={px}
                 cy={py}
                 r={isActive ? 5 : (expanded ? 3.5 : 2)}
                 fill={isActive ? "#ffffff" : "#10b981"}
                 opacity={isActive ? "1" : (expanded ? "0.9" : "0.6")}
               />
-            </g>
-          );
-        })}
+            );
+          })}
 
-        {/* INTERACTIVE CROSSHAIR & TOOLTIP */}
-        {activeIndex !== null && activePoint && (
-          <g>
-            {/* Vertical dashed line */}
-            <line
-              x1={activeXPos}
-              y1={padding.top}
-              x2={activeXPos}
-              y2={height - padding.bottom}
-              stroke="#94a3b8"
-              strokeWidth="1"
-              strokeDasharray="4 3"
-              opacity="0.7"
-            />
+          {/* X-AXIS LABELS */}
+          {(() => {
+            const minLabelSpacing = 35;
+            let lastRenderedX = -999;
+            return visibleData.map((d) => {
+              const idx = allData.indexOf(d);
+              const px = getX(idx);
+              if (px < padding.left || px > renderWidth - padding.right) return null;
 
-            {/* Tooltip background + text — clickable */}
-            {(() => {
-              const tooltipWeight = activePoint.actual !== null
-                ? activePoint.actual.toFixed(1)
-                : (activePoint.trend !== null ? activePoint.trend.toFixed(1) : '--');
-              const tooltipDate = mode === 'weekly'
-                ? (activePoint.weekLabel || activePoint.label)
-                : formatDate(activePoint.label);
-              const tooltipText = `${tooltipWeight} kg · ${tooltipDate}`;
-              const tooltipWidth = tooltipText.length * 5.5 + 16;
-              const tooltipHeight = 20;
-
-              let tooltipX = activeXPos - tooltipWidth / 2;
-              if (tooltipX < padding.left) tooltipX = padding.left;
-              if (tooltipX + tooltipWidth > renderWidth - padding.right) {
-                tooltipX = renderWidth - padding.right - tooltipWidth;
-              }
-              const tooltipY = padding.top - 2;
-
-              return (
-                <g
-                  style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
-                  onClick={(e) => { e.stopPropagation(); handleTooltipClick(); }}
-                >
-                  <rect
-                    x={tooltipX}
-                    y={tooltipY - tooltipHeight + 4}
-                    width={tooltipWidth}
-                    height={tooltipHeight}
-                    rx="4"
-                    fill="#1e293b"
-                    stroke="#475569"
-                    strokeWidth="0.5"
-                    opacity="0.95"
-                  />
-                  <text
-                    x={tooltipX + tooltipWidth / 2}
-                    y={tooltipY - tooltipHeight / 2 + 8}
-                    fontSize="10"
-                    fill={onSelectEntry ? "#93c5fd" : "#e2e8f0"}
-                    textAnchor="middle"
-                    fontWeight="bold"
-                    textDecoration={onSelectEntry ? "underline" : "none"}
-                  >
-                    {tooltipText}
+              if (px - lastRenderedX > minLabelSpacing) {
+                lastRenderedX = px;
+                return (
+                  <text key={idx} x={px} y={height - 6} fontSize="9" fill="#64748b" textAnchor="middle" fontWeight="bold">
+                    {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
                   </text>
-                </g>
-              );
-            })()}
-          </g>
-        )}
+                );
+              }
+              return null;
+            });
+          })()}
 
-        {/* LABELS */}
-        {visibleData.map((d, i) => {
-          const xPos = getX(i);
-          const isFirst = i === 0;
-          const isLast = i === visibleData.length - 1;
-          let shouldRender = false;
-          let anchor: "start" | "middle" | "end" = "middle";
+          {/* INTERACTIVE CROSSHAIR & TOOLTIP */}
+          {isTooltipVisible && activePoint && (
+            <g>
+              <line
+                x1={activeXPos}
+                y1={padding.top}
+                x2={activeXPos}
+                y2={height - padding.bottom}
+                stroke="#94a3b8"
+                strokeWidth="1"
+                strokeDasharray="4 3"
+                opacity="0.7"
+              />
 
-          if (isFirst) {
-            shouldRender = true;
-            anchor = "start";
-          } else if (isLast) {
-            const distToPrev = xPos - lastRenderedX;
-            if (distToPrev > minLabelSpacing) {
-              shouldRender = true;
-              anchor = "end";
-            }
-          } else {
-            const distToLast = lastPointX - xPos;
-            const distToPrev = xPos - lastRenderedX;
-            const requiredSpacing = (lastRenderedX === getX(0))
-              ? minLabelSpacing + firstLabelExtraWidth
-              : minLabelSpacing;
-            if (distToLast > minLabelSpacing && distToPrev > requiredSpacing) {
-              shouldRender = true;
-            }
-          }
+              {/* Redesigned Button-like Tooltip */}
+              {(() => {
+                const tooltipWeight = activePoint.actual !== null
+                  ? activePoint.actual.toFixed(1)
+                  : (activePoint.trend !== null ? activePoint.trend.toFixed(1) : '--');
+                const tooltipDate = mode === 'weekly'
+                  ? (activePoint.weekLabel || activePoint.label)
+                  : formatDate(activePoint.label);
+                
+                // Extra space for arrow padding
+                const tooltipText = `${tooltipWeight} kg · ${tooltipDate}`;
+                const baseWidth = tooltipText.length * 5.5 + 16;
+                const totalWidth = onSelectEntry ? baseWidth + 16 : baseWidth; // +16 for the > icon
+                const tooltipHeight = 24; // slightly taller for better clickability
 
-          if (!shouldRender) return null;
-          lastRenderedX = xPos;
+                let tooltipX = activeXPos - totalWidth / 2;
+                if (tooltipX < padding.left) tooltipX = padding.left;
+                if (tooltipX + totalWidth > renderWidth - padding.right) {
+                  tooltipX = renderWidth - padding.right - totalWidth;
+                }
+                const tooltipY = padding.top - 4;
 
-          return (
-            <text key={i} x={xPos} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
-              {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
-            </text>
-          );
-        })}
+                return (
+                  <g
+                    style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
+                    onClick={(e) => { e.stopPropagation(); handleTooltipClick(); }}
+                    className="group" // allows for hover styles if we use css over svg properties, but standard svg is more cross-platform
+                  >
+                    {/* Shadow/Backdrop */}
+                    <rect
+                      x={tooltipX}
+                      y={tooltipY - tooltipHeight + 4}
+                      width={totalWidth}
+                      height={tooltipHeight}
+                      rx="6"
+                      fill="#0f172a"
+                      stroke="#334155"
+                      strokeWidth="1"
+                      className="transition-colors group-hover:fill-slate-800"
+                    />
+                    <text
+                      x={tooltipX + (onSelectEntry ? 8 : totalWidth / 2)}
+                      y={tooltipY - tooltipHeight / 2 + 8}
+                      fontSize="10"
+                      fill="#f8fafc" // clean white text instead of blue
+                      textAnchor={onSelectEntry ? "start" : "middle"}
+                      fontWeight="bold"
+                    >
+                      {tooltipText}
+                    </text>
+                    
+                    {/* Chevron Icon indicating action */}
+                    {onSelectEntry && (
+                      <path
+                        d="M0 0 L4 4 L0 8"
+                        transform={`translate(${tooltipX + totalWidth - 14}, ${tooltipY - tooltipHeight / 2 + 4})`}
+                        fill="none"
+                        stroke="#94a3b8"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="transition-colors group-hover:stroke-blue-400"
+                      />
+                    )}
+                  </g>
+                );
+              })()}
+            </g>
+          )}
+        </g>
       </svg>
     </div>
   );
