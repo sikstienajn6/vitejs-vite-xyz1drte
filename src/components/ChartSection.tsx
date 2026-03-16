@@ -15,7 +15,6 @@ interface ChartSectionProps {
   containerRef: React.RefObject<HTMLDivElement | null>;
   settings: SettingsData | null;
   projectionData: ProjectionData | null;
-  isDragging: boolean;
   showExplanation: boolean;
   setShowExplanation: (show: boolean) => void;
   handleDragStart: (e: React.MouseEvent | React.TouchEvent) => void;
@@ -35,7 +34,6 @@ export function ChartSection({
   containerRef,
   settings,
   projectionData,
-  isDragging,
   showExplanation,
   setShowExplanation,
   handleDragStart,
@@ -80,7 +78,6 @@ export function ChartSection({
         width={containerWidth}
         settings={settings}
         projection={projectionData}
-        isDragging={isDragging}
         onSelectEntry={onSelectEntry}
       />
 

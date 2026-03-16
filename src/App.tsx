@@ -38,7 +38,7 @@ export default function App() {
     useWeightCalculations(data.weights, data.settings, chartMode, filterRange);
 
   // --- Chart Drag ---
-  const { chartHeight, isDragging, handleDragStart, toggleExpand } = useChartDrag();
+  const { chartHeight, handleDragStart, toggleExpand } = useChartDrag();
   const { containerRef, containerWidth } = useContainerWidth([data.view, loading]);
 
   // --- Advice ---
@@ -91,7 +91,6 @@ export default function App() {
                 containerRef={containerRef}
                 settings={data.settings}
                 projectionData={projectionData}
-                isDragging={isDragging}
                 showExplanation={showExplanation}
                 setShowExplanation={setShowExplanation}
                 handleDragStart={handleDragStart}

@@ -3,7 +3,6 @@ import { HEIGHT_COMPRESSED, HEIGHT_EXPANDED, SNAP_THRESHOLD } from '../lib/const
 
 export function useChartDrag() {
   const [chartHeight, setChartHeight] = useState(HEIGHT_COMPRESSED);
-  const [isDragging, setIsDragging] = useState(false);
 
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
@@ -51,7 +50,6 @@ export function useChartDrag() {
       // Commit to dragging
       pendingRef.current = false;
       isDraggingRef.current = true;
-      setIsDragging(true);
       document.body.style.userSelect = 'none';
     }
 
@@ -70,7 +68,6 @@ export function useChartDrag() {
 
     if (isDraggingRef.current) {
       isDraggingRef.current = false;
-      setIsDragging(false);
       document.body.style.userSelect = '';
 
       setChartHeight(prev => {
@@ -94,7 +91,6 @@ export function useChartDrag() {
       // Mouse: commit immediately (mouse users can scroll with wheel)
       pendingRef.current = false;
       isDraggingRef.current = true;
-      setIsDragging(true);
       document.body.style.userSelect = 'none';
     }
 
@@ -110,5 +106,5 @@ export function useChartDrag() {
     }
   };
 
-  return { chartHeight, isDragging, handleDragStart, toggleExpand };
+  return { chartHeight, handleDragStart, toggleExpand };
 }
