@@ -436,9 +436,37 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
           {/* X-AXIS LABELS */}
           {(() => {
-            let lastRightEdge = -999;
-            return visibleData.map((d) => {
+            // Calculate total available width and minimum spacing required
+            const totalWidth = renderWidth - padding.left - padding.right;
+            const minSpacing = 60; // minimum pixels between label centers
+            const maxLabels = Math.max(2, Math.floor(totalWidth / minSpacing));
+            
+            // To ensure even spacing, we select points at regular intervals
+            const labelIndices: number[] = [];
+            
+            if (visibleData.length <= maxLabels) {
+              // If we have fewer points than max labels, show all of them
+              for (let i = 0; i < visibleData.length; i++) {
+                labelIndices.push(i);
+              }
+            } else {
+              // Otherwise, evenly distribute the indices
+              const step = (visibleData.length - 1) / (maxLabels - 1);
+              for (let i = 0; i < maxLabels; i++) {
+                // Ensure the exact first and last points are included
+                if (i === 0) labelIndices.push(0);
+                else if (i === maxLabels - 1) labelIndices.push(visibleData.length - 1);
+                else labelIndices.push(Math.round(i * step));
+              }
+            }
+
+            return labelIndices.map((datasetIdx) => {
+              const d = visibleData[datasetIdx];
               const idx = allData.indexOf(d);
+              
+              // This shouldn't happen, but just in case
+              if (idx === -1) return null;
+              
               const px = getX(idx);
               if (px < padding.left || px > renderWidth - padding.right) return null;
 
@@ -448,29 +476,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
               const approxTextWidth = textStr.length * 5.5 + 5;
               
               let anchor: "middle" | "start" | "end" = "middle";
-              if (px < padding.left + 15) anchor = "start";
-              else if (px > renderWidth - padding.right - 15) anchor = "end";
+              if (px < padding.left + approxTextWidth / 2) anchor = "start";
+              else if (px > renderWidth - padding.right - approxTextWidth / 2) anchor = "end";
 
-              let leftEdge = px - approxTextWidth / 2;
-              let rightEdge = px + approxTextWidth / 2;
-              
-              if (anchor === "start") {
-                leftEdge = px;
-                rightEdge = px + approxTextWidth;
-              } else if (anchor === "end") {
-                leftEdge = px - approxTextWidth;
-                rightEdge = px;
-              }
-
-              if (leftEdge > lastRightEdge + 12) {
-                lastRightEdge = rightEdge;
-                return (
-                  <text key={idx} x={px} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
-                    {textStr}
-                  </text>
-                );
-              }
-              return null;
+              return (
+                <text key={idx} x={px} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
+                  {textStr}
+                </text>
+              );
             });
           })()}
 

@@ -60,64 +60,72 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
                   </div>
                   <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
                 </div>
-                {isExpanded && (() => {
-                  // Determine if this week is complete (current date is past the following Monday)
-                  const weekEntryDates = item.entries.map(e => new Date(e.date));
-                  const latestEntryDate = new Date(Math.max(...weekEntryDates.map(d => d.getTime())));
-                  const dayOfWeek = latestEntryDate.getDay(); // 0=Sun..6=Sat
-                  const daysUntilNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
-                  const nextMonday = new Date(latestEntryDate);
-                  nextMonday.setDate(latestEntryDate.getDate() + daysUntilNextMonday);
-                  nextMonday.setHours(0, 0, 0, 0);
-                  const now = new Date();
-                  const isWeekComplete = now >= nextMonday;
+                <div 
+                  className={`grid transition-all duration-300 ease-in-out ${
+                    isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                  }`}
+                >
+                  <div className="overflow-hidden">
+                    {(() => {
+                      // Determine if this week is complete (current date is past the following Monday)
+                      const weekEntryDates = item.entries.map(e => new Date(e.date));
+                      const latestEntryDate = new Date(Math.max(...weekEntryDates.map(d => d.getTime())));
+                      const dayOfWeek = latestEntryDate.getDay(); // 0=Sun..6=Sat
+                      const daysUntilNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+                      const nextMonday = new Date(latestEntryDate);
+                      nextMonday.setDate(latestEntryDate.getDate() + daysUntilNextMonday);
+                      nextMonday.setHours(0, 0, 0, 0);
+                      const now = new Date();
+                      const isWeekComplete = now >= nextMonday;
 
-                  const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
-                  return (
-                    <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                      {isWeekComplete && (
-                        <div className="flex flex-col gap-2 mb-2">
-                          <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
-                            <span>Daily Entries</span>
-                            <span className={trendStatus.color}>{trendStatus.text}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            {trendStatus.advice}
-                          </div>
-                        </div>
-                      )}
-                      {!isWeekComplete && (
-                        <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold mb-2">
-                          <span>Daily Entries</span>
-                          <span className="text-slate-600">In progress</span>
-                        </div>
-                      )}
-                      <div className="space-y-2">
-                        {item.entries.slice().reverse().map((entry) => (
-                          <div
-                            key={entry.id}
-                            className="flex justify-between items-center text-sm p-1 rounded hover:bg-slate-800 cursor-pointer"
-                            onClick={() => onSelectEntry(entry)}
-                          >
-                            <div className="flex items-center gap-2 text-slate-500">
-                              <Calendar size={12} /><span>{formatDate(entry.date)}</span>
-                              {entry.comment && <MessageSquare size={12} className="text-blue-400" />}
+                      const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
+                      return (
+                        <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
+                          {isWeekComplete && (
+                            <div className="flex flex-col gap-2 mb-2">
+                              <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                                <span>Daily Entries</span>
+                                <span className={trendStatus.color}>{trendStatus.text}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400">
+                                {trendStatus.advice}
+                              </div>
                             </div>
-                            <div className="flex items-center gap-3">
-                              <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); onDeleteEntry(entry.id); }}
-                                className="text-slate-600 hover:text-red-400 p-1"
+                          )}
+                          {!isWeekComplete && (
+                            <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold mb-2">
+                              <span>Daily Entries</span>
+                              <span className="text-slate-600">In progress</span>
+                            </div>
+                          )}
+                          <div className="space-y-2">
+                            {item.entries.slice().reverse().map((entry) => (
+                              <div
+                                key={entry.id}
+                                className="flex justify-between items-center text-sm p-1 rounded hover:bg-slate-800 cursor-pointer transition-colors"
+                                onClick={() => onSelectEntry(entry)}
                               >
-                                <Trash2 size={12} />
-                              </button>
-                            </div>
+                                <div className="flex items-center gap-2 text-slate-500">
+                                  <Calendar size={12} /><span>{formatDate(entry.date)}</span>
+                                  {entry.comment && <MessageSquare size={12} className="text-blue-400" />}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="font-medium text-slate-300">{entry.weight} kg</span>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); onDeleteEntry(entry.id); }}
+                                    className="text-slate-600 hover:text-red-400 p-1"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
               </div>
             );
           })}
