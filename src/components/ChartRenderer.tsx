@@ -12,11 +12,10 @@ interface ChartRendererProps {
   width: number;
   settings: SettingsData | null;
   projection: ProjectionData | null;
-  isDragging: boolean;
   onSelectEntry?: (entry: WeightEntry) => void;
 }
 
-export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projection, isDragging, onSelectEntry }: ChartRendererProps) {
+export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projection, onSelectEntry }: ChartRendererProps) {
   const [activeDateStr, setActiveDateStr] = useState<string | null>(null);
   const [viewOffset, setViewOffset] = useState<number>(0);  // float offset from the right edge
 
@@ -145,11 +144,11 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!gestureDecided.current || !isSwiping.current) {
       const touchDuration = Date.now() - touchStartTimeRef.current;
-      if (touchDuration < 300) {
+      if (touchDuration < 500) {
         const clientX = e.changedTouches[0].clientX;
         const totalDx = Math.abs(clientX - touchStartXRef.current);
         const totalDy = Math.abs(e.changedTouches[0].clientY - touchStartYRef.current);
-        if (totalDx < 10 && totalDy < 10) {
+        if (totalDx < 30 && totalDy < 30) {
           handleTap(clientX);
         }
       }
@@ -349,7 +348,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   return (
     <div
-      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-[height] duration-300 ease-out'}`}
+      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none`}
       style={{ height: height }}
     >
       <svg
@@ -431,24 +430,37 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
           {/* X-AXIS LABELS */}
           {(() => {
-            const minLabelSpacing = 35;
-            let lastRenderedX = -999;
+            let lastRightEdge = -999;
             return visibleData.map((d) => {
               const idx = allData.indexOf(d);
               const px = getX(idx);
               if (px < padding.left || px > renderWidth - padding.right) return null;
 
-              if (px - lastRenderedX > minLabelSpacing) {
-                lastRenderedX = px;
-                
-                // Adjust text anchor if too close to edges to prevent cutoff
-                let anchor: "middle" | "start" | "end" = "middle";
-                if (px < padding.left + 15) anchor = "start";
-                else if (px > renderWidth - padding.right - 15) anchor = "end";
+              const textStr = mode === 'weekly' ? d.weekLabel : formatDate(d.label);
+              if (!textStr) return null;
 
+              const approxTextWidth = textStr.length * 5.5 + 5;
+              
+              let anchor: "middle" | "start" | "end" = "middle";
+              if (px < padding.left + 15) anchor = "start";
+              else if (px > renderWidth - padding.right - 15) anchor = "end";
+
+              let leftEdge = px - approxTextWidth / 2;
+              let rightEdge = px + approxTextWidth / 2;
+              
+              if (anchor === "start") {
+                leftEdge = px;
+                rightEdge = px + approxTextWidth;
+              } else if (anchor === "end") {
+                leftEdge = px - approxTextWidth;
+                rightEdge = px;
+              }
+
+              if (leftEdge > lastRightEdge + 12) {
+                lastRightEdge = rightEdge;
                 return (
                   <text key={idx} x={px} y={height - 6} fontSize="9" fill="#64748b" textAnchor={anchor} fontWeight="bold">
-                    {mode === 'weekly' ? d.weekLabel : formatDate(d.label)}
+                    {textStr}
                   </text>
                 );
               }
