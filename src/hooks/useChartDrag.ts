@@ -1,15 +1,44 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { HEIGHT_COMPRESSED, HEIGHT_EXPANDED, SNAP_THRESHOLD } from '../lib/constants';
 
 export function useChartDrag() {
-  const [chartHeight, setChartHeight] = useState(HEIGHT_COMPRESSED);
+  const [chartHeight, setChartHeightState] = useState(HEIGHT_COMPRESSED);
+  const currentHeightRef = useRef(HEIGHT_COMPRESSED);
+
+  const setChartHeight = (val: number | ((prev: number) => number)) => {
+    if (typeof val === 'function') {
+      setChartHeightState(prev => {
+        const next = val(prev);
+        currentHeightRef.current = next;
+        return next;
+      });
+    } else {
+      currentHeightRef.current = val;
+      setChartHeightState(val);
+    }
+  };
 
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
-  // Track whether we've committed to dragging vs letting scroll through
   const pendingRef = useRef(false);
   const decidedRef = useRef(false);
+  
+  const animationRef = useRef<number | null>(null);
+
+  const stopAnimation = () => {
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopAnimation();
+      cleanupListeners();
+    };
+  }, []);
 
   const cleanupListeners = () => {
     window.removeEventListener('mousemove', handleDragMove);
@@ -22,9 +51,7 @@ export function useChartDrag() {
     const clientY = 'touches' in e ? (e as TouchEvent).touches[0].clientY : (e as MouseEvent).clientY;
     const delta = clientY - startYRef.current;
 
-    // On the first move, decide whether to capture the drag or let the browser scroll
     if (pendingRef.current && !decidedRef.current) {
-      // Need a small threshold to reliably detect direction
       if (Math.abs(delta) < 3) return;
 
       decidedRef.current = true;
@@ -32,22 +59,16 @@ export function useChartDrag() {
       const swipingDown = delta > 0;
       const swipingUp = delta < 0;
 
-      // Only capture drag in the meaningful direction:
-      // - Minimized + swipe down → expand (capture)
-      // - Expanded + swipe up → collapse (capture)
-      // Otherwise let the browser handle the scroll
       const shouldCapture =
-        (!isExpanded && swipingDown) ||  // minimized, pulling down to expand
-        (isExpanded && swipingUp);        // expanded, pulling up to collapse
+        (!isExpanded && swipingDown) || 
+        (isExpanded && swipingUp);
 
       if (!shouldCapture) {
-        // Release — let native scroll happen
         pendingRef.current = false;
         cleanupListeners();
         return;
       }
 
-      // Commit to dragging
       pendingRef.current = false;
       isDraggingRef.current = true;
       document.body.style.userSelect = 'none';
@@ -80,15 +101,14 @@ export function useChartDrag() {
   };
 
   const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    stopAnimation();
     startYRef.current = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    startHeightRef.current = chartHeight;
+    startHeightRef.current = currentHeightRef.current;
     decidedRef.current = false;
 
     if ('touches' in e) {
-      // Touch: defer the decision until the first move
       pendingRef.current = true;
     } else {
-      // Mouse: commit immediately (mouse users can scroll with wheel)
       pendingRef.current = false;
       isDraggingRef.current = true;
       document.body.style.userSelect = 'none';
@@ -102,7 +122,34 @@ export function useChartDrag() {
 
   const toggleExpand = () => {
     if (!isDraggingRef.current) {
-      setChartHeight(prev => prev > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED);
+      stopAnimation();
+      
+      const startHeight = currentHeightRef.current;
+      const targetHeight = startHeight > SNAP_THRESHOLD ? HEIGHT_COMPRESSED : HEIGHT_EXPANDED;
+      
+      const duration = 250;
+      const startTime = performance.now();
+
+      const animate = (currentTime: number) => {
+        const elapsed = currentTime - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        
+        // easeInOutQuad
+        const ease = progress < 0.5 
+          ? 2 * progress * progress 
+          : -1 + (4 - 2 * progress) * progress;
+
+        const nextHeight = startHeight + (targetHeight - startHeight) * ease;
+        setChartHeight(nextHeight);
+
+        if (progress < 1) {
+          animationRef.current = requestAnimationFrame(animate);
+        } else {
+          animationRef.current = null;
+        }
+      };
+      
+      animationRef.current = requestAnimationFrame(animate);
     }
   };
 

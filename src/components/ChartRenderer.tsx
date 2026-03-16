@@ -66,9 +66,12 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const renderWidth = width > 0 ? width : 100;
   const padding = { top: 20, bottom: 24, left: 32, right: 16 };
   const availableWidth = renderWidth - padding.left - padding.right;
-  const pxPerPoint = availableWidth / Math.max(1, W - 1);
+  
+  // Keep points 5px away from the clipping edges so they don't get cut off
+  const usableWidth = Math.max(10, availableWidth - 10);
+  const pxPerPoint = usableWidth / Math.max(1, W - 1);
 
-  const getX = useCallback((i: number) => padding.left + (i - currLeft) * pxPerPoint, [currLeft, pxPerPoint, padding.left]);
+  const getX = useCallback((i: number) => padding.left + 5 + (i - currLeft) * pxPerPoint, [currLeft, pxPerPoint, padding.left]);
 
   // Visible data slice for rendering and Y-axis min/max
   const visibleDataIndices = useMemo(() => {
@@ -88,6 +91,8 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     let closestDist = Infinity;
 
     for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
+      if (allData[i].actual === null) continue; // Only allow selecting dates with actual entries
+
       const dist = Math.abs(getX(i) - svgX);
       if (dist < closestDist) {
         closestDist = dist;
@@ -150,6 +155,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
         const totalDy = Math.abs(e.changedTouches[0].clientY - touchStartYRef.current);
         if (totalDx < 30 && totalDy < 30) {
           handleTap(clientX);
+          if (e.cancelable) e.preventDefault();
         }
       }
     }
