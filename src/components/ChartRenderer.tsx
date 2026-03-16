@@ -1,36 +1,65 @@
-import React, { useMemo, useState, useRef, useCallback } from 'react';
-import type { ChartPoint, SettingsData, ProjectionData } from '../lib/types';
+import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
+import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
 import { SNAP_THRESHOLD, WEEKLY_TUNNEL_WIDTH, DAILY_TUNNEL_WIDTH } from '../lib/constants';
 import { interpolateColor, formatDate } from '../lib/utils';
 
 interface ChartRendererProps {
   data: ChartPoint[];
+  allData: ChartPoint[];
   mode: 'weekly' | 'daily';
+  filterRange: '1M' | '3M' | 'ALL';
   height: number;
   width: number;
   settings: SettingsData | null;
   projection: ProjectionData | null;
   isDragging: boolean;
+  onSelectEntry?: (entry: WeightEntry) => void;
 }
 
-export function ChartRenderer({ data, mode, height, width, settings, projection, isDragging }: ChartRendererProps) {
+export function ChartRenderer({ data, allData, mode, filterRange, height, width, settings, projection, isDragging, onSelectEntry }: ChartRendererProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [viewOffset, setViewOffset] = useState(0);  // panning offset: how many points scrolled left from end
   const svgRef = useRef<SVGSVGElement>(null);
 
-  const denominator = data.length > 1 ? data.length - 1 : 1;
+  // Touch tracking refs
+  const touchStartXRef = useRef(0);
+  const touchStartYRef = useRef(0);
+  const isSwiping = useRef(false);
+  const gestureDecided = useRef(false);
+  const panAccumulatorRef = useRef(0);
+
+  // Default window size = how many points the filter range shows
+  const defaultWindowSize = data.length;
+
+  // Reset viewOffset when filterRange changes (user clicks 1M/3M/ALL)
+  useEffect(() => {
+    setViewOffset(0);
+    setActiveIndex(null);
+  }, [filterRange]);
+
+  // Compute visible data slice from allData
+  const visibleData = useMemo(() => {
+    if (allData.length === 0) return [];
+    const windowSize = Math.max(defaultWindowSize, 2);
+    const endIdx = allData.length - viewOffset;
+    const startIdx = Math.max(0, endIdx - windowSize);
+    return allData.slice(startIdx, endIdx);
+  }, [allData, defaultWindowSize, viewOffset]);
+
+  const denominator = visibleData.length > 1 ? visibleData.length - 1 : 1;
   const renderWidth = width > 0 ? width : 100;
   const padding = { top: 20, bottom: 24, left: 32, right: 16 };
   const availableWidth = renderWidth - padding.left - padding.right;
   const getX = useCallback((i: number) => padding.left + (i / denominator) * availableWidth, [padding.left, denominator, availableWidth]);
 
   const findNearestIndex = useCallback((clientX: number) => {
-    if (!svgRef.current || data.length === 0) return null;
+    if (!svgRef.current || visibleData.length === 0) return null;
     const rect = svgRef.current.getBoundingClientRect();
     const svgX = ((clientX - rect.left) / rect.width) * renderWidth;
-    
+
     let closestIdx = 0;
     let closestDist = Infinity;
-    for (let i = 0; i < data.length; i++) {
+    for (let i = 0; i < visibleData.length; i++) {
       const dist = Math.abs(getX(i) - svgX);
       if (dist < closestDist) {
         closestDist = dist;
@@ -38,33 +67,133 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
       }
     }
     return closestIdx;
-  }, [data, renderWidth, getX]);
+  }, [visibleData, renderWidth, getX]);
 
-  const handleInteractionStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const idx = findNearestIndex(clientX);
-    setActiveIndex(idx);
-  }, [findNearestIndex]);
-
-  const handleInteractionMove = useCallback((e: React.MouseEvent | React.TouchEvent) => {
-    if (activeIndex === null && !('touches' in e)) return;
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const idx = findNearestIndex(clientX);
-    setActiveIndex(idx);
-  }, [activeIndex, findNearestIndex]);
-
-  const handleInteractionEnd = useCallback(() => {
-    setActiveIndex(null);
+  // --- Touch interaction: distinguish tap vs horizontal swipe ---
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    touchStartXRef.current = touch.clientX;
+    touchStartYRef.current = touch.clientY;
+    isSwiping.current = false;
+    gestureDecided.current = false;
+    panAccumulatorRef.current = 0;
   }, []);
 
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartXRef.current;
+    const dy = touch.clientY - touchStartYRef.current;
+
+    // First move: decide if this is a horizontal swipe or vertical scroll
+    if (!gestureDecided.current) {
+      if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return; // not enough movement
+      gestureDecided.current = true;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        isSwiping.current = true;
+      } else {
+        isSwiping.current = false;
+        return; // let browser handle vertical scroll
+      }
+    }
+
+    if (!isSwiping.current) return;
+
+    // Prevent scroll while panning
+    if (e.cancelable) e.preventDefault();
+
+    // Calculate how many data points to shift per px
+    const pxPerPoint = availableWidth / denominator;
+    panAccumulatorRef.current += -dx; // negative because swipe-left = go earlier = increase offset
+    touchStartXRef.current = touch.clientX;
+    touchStartYRef.current = touch.clientY;
+
+    const pointsToShift = Math.round(panAccumulatorRef.current / pxPerPoint);
+    if (pointsToShift !== 0) {
+      panAccumulatorRef.current -= pointsToShift * pxPerPoint;
+      setViewOffset(prev => {
+        const maxOffset = Math.max(0, allData.length - defaultWindowSize);
+        return Math.max(0, Math.min(maxOffset, prev + pointsToShift));
+      });
+    }
+  }, [allData.length, defaultWindowSize, availableWidth, denominator]);
+
+  const handleTouchEnd = useCallback(() => {
+    if (!gestureDecided.current || !isSwiping.current) {
+      // It was a tap — toggle tooltip
+      // Re-use last touch position to find nearest
+    }
+    // Don't clear activeIndex on touch end — tooltip persists
+    isSwiping.current = false;
+    gestureDecided.current = false;
+  }, []);
+
+  const handleTap = useCallback((e: React.TouchEvent | React.MouseEvent) => {
+    // For touch: only handle on touchEnd if it was a tap (not a swipe)
+    const clientX = 'changedTouches' in e
+      ? (e as React.TouchEvent).changedTouches[0].clientX
+      : (e as React.MouseEvent).clientX;
+
+    const dx = 'changedTouches' in e
+      ? Math.abs(clientX - touchStartXRef.current)
+      : 0;
+
+    // If it was a swipe, don't handle as tap
+    if (dx > 10 && 'changedTouches' in e) return;
+
+    const idx = findNearestIndex(clientX);
+    if (idx === activeIndex) {
+      setActiveIndex(null); // toggle off
+    } else {
+      setActiveIndex(idx);
+    }
+  }, [findNearestIndex, activeIndex]);
+
+  // Mouse handlers (for desktop)
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    const idx = findNearestIndex(e.clientX);
+    if (idx === activeIndex) {
+      setActiveIndex(null);
+    } else {
+      setActiveIndex(idx);
+    }
+  }, [findNearestIndex, activeIndex]);
+
+  // --- Tooltip click handler → open EntryDetailModal ---
+  const handleTooltipClick = useCallback(() => {
+    if (activeIndex === null || !onSelectEntry) return;
+    const point = visibleData[activeIndex];
+    if (!point) return;
+
+    if (mode === 'weekly') {
+      // Synthetic weekly entry
+      const entry: WeightEntry = {
+        id: `weekly-${point.label}`,
+        weight: point.actual ?? point.trend ?? 0,
+        date: point.weekLabel || point.label,
+        createdAt: null,
+      };
+      onSelectEntry(entry);
+    } else {
+      // Daily: create entry
+      const entry: WeightEntry = {
+        id: `daily-${point.label}`,
+        weight: point.actual ?? point.trend ?? 0,
+        date: point.label,
+        createdAt: null,
+      };
+      onSelectEntry(entry);
+    }
+  }, [activeIndex, visibleData, mode, onSelectEntry]);
+
   const stops = useMemo(() => {
-    if (data.length < 2 || !settings) return [];
+    if (visibleData.length < 2 || !settings) return [];
 
     const stopList: React.ReactElement[] = [];
+    const denom = visibleData.length > 1 ? visibleData.length - 1 : 1;
 
-    for (let i = 0; i < data.length - 1; i++) {
-      const startPoint = data[i];
-      const endPoint = data[i + 1];
+    for (let i = 0; i < visibleData.length - 1; i++) {
+      const startPoint = visibleData[i];
+      const endPoint = visibleData[i + 1];
 
       if (startPoint.trend === null || endPoint.trend === null) continue;
 
@@ -82,7 +211,7 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
 
       const color = interpolateColor(diff);
 
-      const offsetVal = (i + 0.5) / denominator;
+      const offsetVal = (i + 0.5) / denom;
       const offsetPercent = offsetVal * 100;
 
       if (stopList.length === 0) {
@@ -91,15 +220,15 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
 
       stopList.push(<stop key={`mid-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
 
-      if (i === data.length - 2) {
+      if (i === visibleData.length - 2) {
         stopList.push(<stop key="end" offset="100%" stopColor={color} />);
       }
     }
 
     return stopList;
-  }, [data, settings, mode, denominator]);
+  }, [visibleData, settings, mode]);
 
-  if (!data || data.length === 0) return (
+  if (!visibleData || visibleData.length === 0) return (
     <div className="flex items-center justify-center text-slate-500 bg-slate-900/50 rounded-xl border border-dashed border-slate-800" style={{ height: height }}>
       <p className="text-sm">Log data to see trend</p>
     </div>
@@ -108,7 +237,7 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   const expanded = height > SNAP_THRESHOLD;
   const tunnelTolerance = mode === 'weekly' ? WEEKLY_TUNNEL_WIDTH : DAILY_TUNNEL_WIDTH;
 
-  const validValues = data.flatMap<number>(d => {
+  const validValues = visibleData.flatMap<number>(d => {
     const vals: number[] = [];
     if (d.actual !== null) vals.push(d.actual);
     if (d.trend !== null) vals.push(d.trend);
@@ -137,7 +266,7 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   const maxVal = midPoint + (effectiveRange / 2) + buffer;
   const range = maxVal - minVal;
 
-  const count = data.length;
+  const count = visibleData.length;
   const getY = (val: number) => (height - padding.bottom) - ((val - minVal) / range) * (height - padding.top - padding.bottom);
   const axisLineY = height - padding.bottom;
   const clampToAxis = (val: number) => Math.min(val, axisLineY);
@@ -166,7 +295,7 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   let trendPath = '';
   if (count > 1) {
     let lastValidT = -1;
-    data.forEach((d, i) => {
+    visibleData.forEach((d, i) => {
       if (d.trend === null) return;
       const x = getX(i);
       const y = getY(d.trend);
@@ -179,20 +308,14 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   let projectionPath = '';
   let tunnelPath = '';
 
-  if (projection && data.length > 0) {
+  if (projection && visibleData.length > 0) {
     const msPerDay = 86400000;
     const upperPoints: [number, number][] = [];
     const lowerPoints: [number, number][] = [];
 
-    data.forEach((d, i) => {
-      let idealY = 0;
+    visibleData.forEach((d, i) => {
       const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-
-      // Use dailySlope * diffDays for both modes — this gives a perfectly linear
-      // projection regardless of irregular entry spacing in weekly mode.
-      // (Math.round(diffDays / 7) previously caused jitter when weeks had entries
-      // starting on different days, e.g. Wednesday instead of Monday.)
-      idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
 
       const x = getX(i);
       const y = getY(idealY);
@@ -220,21 +343,18 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
   }
 
   // --- X-Axis Label Logic ---
-  // Bug 3 fix: Use a wider spacing threshold for the first label (anchor="start" means
-  // its text extends to the right), and skip subsequent labels that would overlap.
   const minLabelSpacing = 35;
-  const firstLabelExtraWidth = 20; // extra width for anchor="start" labels extending right
+  const firstLabelExtraWidth = 20;
   let lastRenderedX = -999;
-  const lastPointX = getX(data.length - 1);
+  const lastPointX = getX(visibleData.length - 1);
 
   // --- Interactive Tooltip Logic ---
-  // Active point data for tooltip
-  const activePoint = activeIndex !== null ? data[activeIndex] : null;
-  const activeX = activeIndex !== null ? getX(activeIndex) : 0;
+  const activePoint = activeIndex !== null ? visibleData[activeIndex] : null;
+  const activeXPos = activeIndex !== null ? getX(activeIndex) : 0;
 
   return (
     <div
-      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]'}`}
+      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none ${isDragging ? '' : 'transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)]'}`}
       style={{ height: height }}
     >
       <svg
@@ -242,13 +362,14 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
         width="100%" height="100%"
         viewBox={`0 0 ${renderWidth} ${height}`}
         className="block touch-none"
-        onMouseDown={handleInteractionStart}
-        onMouseMove={handleInteractionMove}
-        onMouseUp={handleInteractionEnd}
-        onMouseLeave={() => setActiveIndex(null)}
-        onTouchStart={handleInteractionStart}
-        onTouchMove={handleInteractionMove}
-        onTouchEnd={handleInteractionEnd}
+        onMouseDown={handleMouseDown}
+        onMouseLeave={() => {}} // don't clear on leave — tooltip persists
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={(e) => {
+          handleTouchEnd();
+          handleTap(e);
+        }}
       >
 
         <defs>
@@ -292,8 +413,8 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
           />
         )}
 
-        {/* DATA POINTS — no static weight labels, tooltip handles that now */}
-        {data.map((d, i) => {
+        {/* DATA POINTS */}
+        {visibleData.map((d, i) => {
           if (d.actual === null) return null;
           const px = getX(i);
           const py = getY(d.actual);
@@ -317,9 +438,9 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
           <g>
             {/* Vertical dashed line */}
             <line
-              x1={activeX}
+              x1={activeXPos}
               y1={padding.top}
-              x2={activeX}
+              x2={activeXPos}
               y2={height - padding.bottom}
               stroke="#94a3b8"
               strokeWidth="1"
@@ -327,7 +448,7 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
               opacity="0.7"
             />
 
-            {/* Tooltip background + text */}
+            {/* Tooltip background + text — clickable */}
             {(() => {
               const tooltipWeight = activePoint.actual !== null
                 ? activePoint.actual.toFixed(1)
@@ -339,8 +460,7 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
               const tooltipWidth = tooltipText.length * 5.5 + 16;
               const tooltipHeight = 20;
 
-              // Position: above the crosshair, clamped to chart bounds
-              let tooltipX = activeX - tooltipWidth / 2;
+              let tooltipX = activeXPos - tooltipWidth / 2;
               if (tooltipX < padding.left) tooltipX = padding.left;
               if (tooltipX + tooltipWidth > renderWidth - padding.right) {
                 tooltipX = renderWidth - padding.right - tooltipWidth;
@@ -348,7 +468,10 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
               const tooltipY = padding.top - 2;
 
               return (
-                <g>
+                <g
+                  style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
+                  onClick={(e) => { e.stopPropagation(); handleTooltipClick(); }}
+                >
                   <rect
                     x={tooltipX}
                     y={tooltipY - tooltipHeight + 4}
@@ -364,9 +487,10 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
                     x={tooltipX + tooltipWidth / 2}
                     y={tooltipY - tooltipHeight / 2 + 8}
                     fontSize="10"
-                    fill="#e2e8f0"
+                    fill={onSelectEntry ? "#93c5fd" : "#e2e8f0"}
                     textAnchor="middle"
                     fontWeight="bold"
+                    textDecoration={onSelectEntry ? "underline" : "none"}
                   >
                     {tooltipText}
                   </text>
@@ -377,10 +501,10 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
         )}
 
         {/* LABELS */}
-        {data.map((d, i) => {
+        {visibleData.map((d, i) => {
           const xPos = getX(i);
           const isFirst = i === 0;
-          const isLast = i === data.length - 1;
+          const isLast = i === visibleData.length - 1;
           let shouldRender = false;
           let anchor: "start" | "middle" | "end" = "middle";
 
@@ -388,7 +512,6 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
             shouldRender = true;
             anchor = "start";
           } else if (isLast) {
-            // Only render the last label if it's far enough from the previous rendered label
             const distToPrev = xPos - lastRenderedX;
             if (distToPrev > minLabelSpacing) {
               shouldRender = true;
@@ -397,8 +520,6 @@ export function ChartRenderer({ data, mode, height, width, settings, projection,
           } else {
             const distToLast = lastPointX - xPos;
             const distToPrev = xPos - lastRenderedX;
-            // Bug 3 fix: After the first label (which is left-anchored and extends right),
-            // require extra spacing before rendering the second label
             const requiredSpacing = (lastRenderedX === getX(0))
               ? minLabelSpacing + firstLabelExtraWidth
               : minLabelSpacing;

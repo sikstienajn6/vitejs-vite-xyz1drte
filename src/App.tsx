@@ -34,7 +34,7 @@ export default function App() {
   const [adviceSkippedToday, setAdviceSkippedToday] = useState(false);
 
   // --- Derived Calculations ---
-  const { weeklyData, trendMap, currentTrendRate, projectionData, finalChartData } =
+  const { weeklyData, trendMap, currentTrendRate, projectionData, allChartData, finalChartData } =
     useWeightCalculations(data.weights, data.settings, chartMode, filterRange);
 
   // --- Chart Drag ---
@@ -81,6 +81,7 @@ export default function App() {
 
               <ChartSection
                 finalChartData={finalChartData}
+                allChartData={allChartData}
                 chartMode={chartMode}
                 setChartMode={setChartMode}
                 filterRange={filterRange}
@@ -95,6 +96,7 @@ export default function App() {
                 setShowExplanation={setShowExplanation}
                 handleDragStart={handleDragStart}
                 toggleExpand={toggleExpand}
+                onSelectEntry={setSelectedEntry}
               />
 
               <LogWeightForm

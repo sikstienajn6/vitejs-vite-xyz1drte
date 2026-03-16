@@ -1,10 +1,11 @@
 import React from 'react';
 import { Info } from 'lucide-react';
-import type { ChartPoint, SettingsData, ProjectionData } from '../lib/types';
+import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
 import { ChartRenderer } from './ChartRenderer';
 
 interface ChartSectionProps {
   finalChartData: ChartPoint[];
+  allChartData: ChartPoint[];
   chartMode: 'weekly' | 'daily';
   setChartMode: (mode: 'weekly' | 'daily') => void;
   filterRange: '1M' | '3M' | 'ALL';
@@ -19,10 +20,12 @@ interface ChartSectionProps {
   setShowExplanation: (show: boolean) => void;
   handleDragStart: (e: React.MouseEvent | React.TouchEvent) => void;
   toggleExpand: () => void;
+  onSelectEntry: (entry: WeightEntry) => void;
 }
 
 export function ChartSection({
   finalChartData,
+  allChartData,
   chartMode,
   setChartMode,
   filterRange,
@@ -37,6 +40,7 @@ export function ChartSection({
   setShowExplanation,
   handleDragStart,
   toggleExpand,
+  onSelectEntry,
 }: ChartSectionProps) {
   return (
     <section className="flex flex-col" ref={containerRef}>
@@ -69,12 +73,15 @@ export function ChartSection({
 
       <ChartRenderer
         data={finalChartData}
+        allData={allChartData}
         mode={chartMode}
+        filterRange={filterRange}
         height={chartHeight}
         width={containerWidth}
         settings={settings}
         projection={projectionData}
         isDragging={isDragging}
+        onSelectEntry={onSelectEntry}
       />
 
       <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none">

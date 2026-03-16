@@ -61,18 +61,37 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
                   <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
                 </div>
                 {isExpanded && (() => {
+                  // Determine if this week is complete (current date is past the following Monday)
+                  const weekEntryDates = item.entries.map(e => new Date(e.date));
+                  const latestEntryDate = new Date(Math.max(...weekEntryDates.map(d => d.getTime())));
+                  const dayOfWeek = latestEntryDate.getDay(); // 0=Sun..6=Sat
+                  const daysUntilNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+                  const nextMonday = new Date(latestEntryDate);
+                  nextMonday.setDate(latestEntryDate.getDate() + daysUntilNextMonday);
+                  nextMonday.setHours(0, 0, 0, 0);
+                  const now = new Date();
+                  const isWeekComplete = now >= nextMonday;
+
                   const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
                   return (
                     <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                      <div className="flex flex-col gap-2 mb-2">
-                        <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                      {isWeekComplete && (
+                        <div className="flex flex-col gap-2 mb-2">
+                          <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                            <span>Daily Entries</span>
+                            <span className={trendStatus.color}>{trendStatus.text}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {trendStatus.advice}
+                          </div>
+                        </div>
+                      )}
+                      {!isWeekComplete && (
+                        <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold mb-2">
                           <span>Daily Entries</span>
-                          <span className={trendStatus.color}>{trendStatus.text}</span>
+                          <span className="text-slate-600">In progress</span>
                         </div>
-                        <div className="text-[10px] text-slate-400">
-                          {trendStatus.advice}
-                        </div>
-                      </div>
+                      )}
                       <div className="space-y-2">
                         {item.entries.slice().reverse().map((entry) => (
                           <div

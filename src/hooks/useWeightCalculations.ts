@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { WeightEntry, SettingsData, WeeklySummary, ChartPoint, ProjectionData } from '../lib/types';
 import { EMA_ALPHA, TARGET_TOLERANCE } from '../lib/constants';
-import { getWeekKey, formatDate, getDaysArray, getMedian } from '../lib/utils';
+import { getWeekKey, formatDate, getDaysArray, getMedian, getWeekMonday } from '../lib/utils';
 
 export function useWeightCalculations(
   weights: WeightEntry[],
@@ -106,7 +106,7 @@ export function useWeightCalculations(
     } else {
       const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
       const anchorWeek = weeklyData[anchorIndex];
-      const anchorDate = new Date(anchorWeek.entries[0].date);
+      const anchorDate = getWeekMonday(anchorWeek.entries[0].date);
 
       return {
         anchorDate: anchorDate,
@@ -118,56 +118,31 @@ export function useWeightCalculations(
     }
   }, [weights, weeklyData, chartMode, settings, trendMap]);
 
-  const finalChartData = useMemo<ChartPoint[]>(() => {
+  // All chart data without date filtering — used for panning
+  const allChartData = useMemo<ChartPoint[]>(() => {
     if (weeklyData.length === 0 || !settings) return [];
 
-    const now = new Date();
-    const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
-    const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
-
-    let startDate = new Date('2000-01-01');
-    const earliestDataDate = new Date(weights[weights.length - 1]?.date || now);
-
-    if (filterRange === '1M') {
-      startDate = new Date(chartEndDate);
-      startDate.setMonth(chartEndDate.getMonth() - 1);
-    } else if (filterRange === '3M') {
-      startDate = new Date(chartEndDate);
-      startDate.setMonth(chartEndDate.getMonth() - 3);
-    } else {
-      startDate = earliestDataDate;
-    }
-
-    if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
-
     if (chartMode === 'weekly') {
-      return weeklyData
-        .filter(w => new Date(w.entries[0].date) >= startDate)
-        .map(w => ({
-          label: w.weekId,
-          dateObj: new Date(w.entries[0].date),
-          weekLabel: w.weekLabel,
-          actual: w.rawAvg,
-          trend: w.actual,
-        }));
+      return weeklyData.map(w => ({
+        label: w.weekId,
+        dateObj: getWeekMonday(w.entries[0].date),
+        weekLabel: w.weekLabel,
+        actual: w.rawAvg,
+        trend: w.actual,
+      }));
     } else {
+      const now = new Date();
+      const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
+      const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
+      const earliestDataDate = new Date(weights[weights.length - 1]?.date || now);
+
       const weightMap = new Map(weights.map(w => [w.date, w.weight]));
-      const allDays = getDaysArray(startDate, chartEndDate);
+      const allDays = getDaysArray(earliestDataDate, chartEndDate);
 
       let lastKnownTrend = 0;
-      const startStr = startDate.toISOString().split('T')[0];
       const sortedDates: string[] = Array.from(trendMap.keys()).map(k => String(k)).sort();
 
-      for (let i = sortedDates.length - 1; i >= 0; i--) {
-        if (sortedDates[i] <= startStr) {
-          const trendVal = trendMap.get(sortedDates[i]);
-          if (trendVal !== undefined) {
-            lastKnownTrend = trendVal;
-            break;
-          }
-        }
-      }
-      if (lastKnownTrend === 0 && sortedDates.length > 0) {
+      if (sortedDates.length > 0) {
         const firstTrend = trendMap.get(sortedDates[0]);
         if (firstTrend !== undefined) {
           lastKnownTrend = firstTrend;
@@ -187,7 +162,32 @@ export function useWeightCalculations(
         };
       }).filter(p => p.trend !== 0);
     }
-  }, [weeklyData, weights, chartMode, settings, filterRange, trendMap]);
+  }, [weeklyData, weights, chartMode, settings, trendMap]);
 
-  return { weeklyData, trendMap, currentTrendRate, projectionData, finalChartData };
+  // Filtered view based on filterRange — used as default visible window
+  const finalChartData = useMemo<ChartPoint[]>(() => {
+    if (allChartData.length === 0) return [];
+
+    const now = new Date();
+    const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
+    const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
+    const earliestDataDate = allChartData[0].dateObj;
+
+    let startDate: Date;
+    if (filterRange === '1M') {
+      startDate = new Date(chartEndDate);
+      startDate.setMonth(chartEndDate.getMonth() - 1);
+    } else if (filterRange === '3M') {
+      startDate = new Date(chartEndDate);
+      startDate.setMonth(chartEndDate.getMonth() - 3);
+    } else {
+      startDate = earliestDataDate;
+    }
+
+    if (startDate < earliestDataDate && filterRange !== 'ALL') startDate = earliestDataDate;
+
+    return allChartData.filter(p => p.dateObj >= startDate);
+  }, [allChartData, weights, filterRange]);
+
+  return { weeklyData, trendMap, currentTrendRate, projectionData, allChartData, finalChartData };
 }

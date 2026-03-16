@@ -43,6 +43,15 @@ export const getMedian = (values: number[]) => {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 };
 
+export const getWeekMonday = (date: string): Date => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();          // 0=Sun, 1=Mon, …, 6=Sat
+  const diff = day === 0 ? -6 : 1 - day;   // shift back to Monday
+  d.setDate(d.getDate() + diff);
+  return d;
+};
+
 export const interpolateColor = (diff: number) => {
   const cGreen = [16, 185, 129];
   const cOrange = [251, 191, 36];
