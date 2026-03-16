@@ -136,7 +136,6 @@ export function useWeightCalculations(
       const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
       const earliestDataDate = new Date(weights[weights.length - 1]?.date || now);
 
-      const weightMap = new Map(weights.map(w => [w.date, w.weight]));
       const allDays = getDaysArray(earliestDataDate, chartEndDate);
 
       let lastKnownTrend = 0;
@@ -154,11 +153,14 @@ export function useWeightCalculations(
           lastKnownTrend = trendMap.get(dateStr)!;
         }
 
+        const originalEntry = weights.find(w => w.date === dateStr);
+
         return {
           label: dateStr,
           dateObj: new Date(dateStr),
-          actual: weightMap.has(dateStr) ? weightMap.get(dateStr)! : null,
+          actual: originalEntry ? originalEntry.weight : null,
           trend: lastKnownTrend,
+          originalEntry: originalEntry
         };
       }).filter(p => p.trend !== 0);
     }

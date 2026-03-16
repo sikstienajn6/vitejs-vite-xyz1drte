@@ -32,6 +32,7 @@ export interface ChartPoint {
   actual: number | null;
   trend: number | null;
   weekLabel?: string;
+  originalEntry?: WeightEntry;
 }
 
 export interface ProjectionData {

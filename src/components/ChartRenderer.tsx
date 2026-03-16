@@ -137,6 +137,11 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     lastTouchYRef.current = touch.clientY;
   }, [pxPerPoint, maxOffset]);
 
+  const handleTap = useCallback((clientX: number) => {
+    const label = findNearestDateStr(clientX);
+    setActiveDateStr(prev => prev === label ? null : label);
+  }, [findNearestDateStr]);
+
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!gestureDecided.current || !isSwiping.current) {
       const touchDuration = Date.now() - touchStartTimeRef.current;
@@ -151,12 +156,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     }
     isSwiping.current = false;
     gestureDecided.current = false;
-  }, [touchStartXRef, touchStartYRef, touchStartTimeRef]);
-
-  const handleTap = useCallback((clientX: number) => {
-    const label = findNearestDateStr(clientX);
-    setActiveDateStr(prev => prev === label ? null : label);
-  }, [findNearestDateStr]);
+  }, [touchStartXRef, touchStartYRef, touchStartTimeRef, handleTap]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     handleTap(e.clientX);
@@ -167,19 +167,23 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const point = allData.find(d => d.label === activeDateStr);
     if (!point) return;
 
-    if (mode === 'weekly') {
+    if (mode === 'daily') {
+      if (point.originalEntry) {
+        onSelectEntry(point.originalEntry);
+      } else {
+        const entry: WeightEntry = {
+          id: `daily-${point.label}`,
+          weight: point.actual ?? point.trend ?? 0,
+          date: point.label,
+          createdAt: null,
+        };
+        onSelectEntry(entry);
+      }
+    } else {
       const entry: WeightEntry = {
         id: `weekly-${point.label}`,
         weight: point.actual ?? point.trend ?? 0,
         date: point.weekLabel || point.label,
-        createdAt: null,
-      };
-      onSelectEntry(entry);
-    } else {
-      const entry: WeightEntry = {
-        id: `daily-${point.label}`,
-        weight: point.actual ?? point.trend ?? 0,
-        date: point.label,
         createdAt: null,
       };
       onSelectEntry(entry);
@@ -475,11 +479,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                   ? (activePoint.weekLabel || activePoint.label)
                   : formatDate(activePoint.label);
                 
-                // Extra space for arrow padding
                 const tooltipText = `${tooltipWeight} kg · ${tooltipDate}`;
-                const baseWidth = tooltipText.length * 5.5 + 16;
-                const totalWidth = onSelectEntry ? baseWidth + 16 : baseWidth; // +16 for the > icon
-                const tooltipHeight = 28; // slightly taller for better clickability
+                const stringWidth = tooltipText.length * 5.5;
+                const totalWidth = onSelectEntry ? stringWidth + 32 : stringWidth + 24;
+                const tooltipHeight = 28;
 
                 let tooltipX = activeXPos - totalWidth / 2;
                 if (tooltipX < padding.left) tooltipX = padding.left;
@@ -487,18 +490,16 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                   tooltipX = renderWidth - padding.right - totalWidth;
                 }
                 
-                // Place tooltip exactly at the top of the SVG canvas to avoid being cut off by padding
                 const tooltipY = Math.max(0, padding.top - tooltipHeight - 4); 
 
                 return (
                   <g
                     style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
                     onClick={(e) => { e.stopPropagation(); handleTooltipClick(); }}
-                    onTouchStart={(e) => e.stopPropagation()} // Stop chart from panning
+                    onTouchStart={(e) => e.stopPropagation()}
                     onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); handleTooltipClick(); }}
-                    className="group" // allows for hover styles if we use css over svg properties, but standard svg is more cross-platform
+                    className="group"
                   >
-                    {/* Shadow/Backdrop */}
                     <rect
                       x={tooltipX}
                       y={tooltipY}
@@ -511,21 +512,20 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       className="transition-colors group-hover:fill-slate-800"
                     />
                     <text
-                      x={tooltipX + (onSelectEntry ? 8 : totalWidth / 2)}
+                      x={tooltipX + totalWidth / 2 - (onSelectEntry ? 6 : 0)}
                       y={tooltipY + 18}
                       fontSize="10"
-                      fill="#f8fafc" // clean white text instead of blue
-                      textAnchor={onSelectEntry ? "start" : "middle"}
+                      fill="#f8fafc"
+                      textAnchor="middle"
                       fontWeight="bold"
                     >
                       {tooltipText}
                     </text>
                     
-                    {/* Chevron Icon indicating action */}
                     {onSelectEntry && (
                       <path
                         d="M0 0 L4 4 L0 8"
-                        transform={`translate(${tooltipX + totalWidth - 14}, ${tooltipY + 10})`}
+                        transform={`translate(${tooltipX + totalWidth / 2 + stringWidth / 2 - 2}, ${tooltipY + 10})`}
                         fill="none"
                         stroke="#94a3b8"
                         strokeWidth="1.5"
