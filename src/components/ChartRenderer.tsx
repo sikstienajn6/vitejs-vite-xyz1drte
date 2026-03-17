@@ -66,7 +66,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const renderWidth = width > 0 ? width : 100;
   const padding = { top: 20, bottom: 24, left: 32, right: 16 };
   const availableWidth = renderWidth - padding.left - padding.right;
-  
+
   // Keep points 5px away from the clipping edges so they don't get cut off
   const usableWidth = Math.max(10, availableWidth - 10);
   const pxPerPoint = usableWidth / Math.max(1, W - 1);
@@ -117,7 +117,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
     const dx = touch.clientX - lastTouchXRef.current;
-    
+
     if (!gestureDecided.current) {
       const totalDx = Math.abs(touch.clientX - touchStartXRef.current);
       const totalDy = Math.abs(touch.clientY - touchStartYRef.current);
@@ -199,15 +199,15 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const stops = useMemo(() => {
     const visibleCount = visibleDataIndices.end - visibleDataIndices.start;
     if (visibleCount < 2 || !settings) return [];
-    
+
     const stopList: React.ReactElement[] = [];
-    const windowSize = 3; // Look up to 3 points backwards and 3 points forwards
+    const windowSize = 4; // Look up to 3 points backwards and 3 points forwards
     let lastColor = '';
 
     for (let i = 0; i < visibleCount; i++) {
       const absIndex = visibleDataIndices.start + i;
       const currentPoint = allData[absIndex];
-      
+
       if (!currentPoint || currentPoint.trend === null) continue;
 
       let slopeSum = 0;
@@ -215,7 +215,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
       for (let offset = -windowSize; offset <= windowSize; offset++) {
         if (offset === 0) continue;
-        
+
         const neighborIdx = absIndex + offset;
         if (neighborIdx >= 0 && neighborIdx < allData.length) {
           const neighborPoint = allData[neighborIdx];
@@ -293,8 +293,8 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       <p className="text-sm">Log data to see trend</p>
     </div>
   );
-  
-  
+
+
   const axisLineY = height - padding.bottom;
   const clampToAxis = (val: number) => Math.min(val, axisLineY);
 
@@ -367,7 +367,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const activeIndex = activeDateStr ? allData.findIndex(d => d.label === activeDateStr) : -1;
   const activePoint = activeIndex >= 0 ? allData[activeIndex] : null;
   const activeXPos = activeIndex >= 0 ? getX(activeIndex) : -100;
-  
+
   // Only show tooltip if it's within the visible bounds padded slightly
   const isTooltipVisible = activePoint && activeXPos >= padding.left - 5 && activeXPos <= renderWidth - padding.right + 5;
 
@@ -459,10 +459,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
             const totalWidth = renderWidth - padding.left - padding.right;
             const minSpacing = 60; // minimum pixels between label centers
             const maxLabels = Math.max(2, Math.floor(totalWidth / minSpacing));
-            
+
             // To ensure even spacing, we select points at regular intervals
             const labelIndices: number[] = [];
-            
+
             if (visibleData.length <= maxLabels) {
               // If we have fewer points than max labels, show all of them
               for (let i = 0; i < visibleData.length; i++) {
@@ -482,10 +482,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
             return labelIndices.map((datasetIdx) => {
               const d = visibleData[datasetIdx];
               const idx = allData.indexOf(d);
-              
+
               // This shouldn't happen, but just in case
               if (idx === -1) return null;
-              
+
               const px = getX(idx);
               if (px < padding.left || px > renderWidth - padding.right) return null;
 
@@ -493,7 +493,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
               if (!textStr) return null;
 
               const approxTextWidth = textStr.length * 5.5 + 5;
-              
+
               let anchor: "middle" | "start" | "end" = "middle";
               if (px < padding.left + approxTextWidth / 2) anchor = "start";
               else if (px > renderWidth - padding.right - approxTextWidth / 2) anchor = "end";
@@ -528,7 +528,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 const tooltipDate = mode === 'weekly'
                   ? (activePoint.weekLabel || activePoint.label)
                   : formatDate(activePoint.label);
-                
+
                 const tooltipText = `${tooltipWeight} kg · ${tooltipDate}`;
                 const stringWidth = tooltipText.length * 5.5;
                 const totalWidth = onSelectEntry ? stringWidth + 32 : stringWidth + 24;
@@ -539,8 +539,8 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 if (tooltipX + totalWidth > renderWidth - padding.right) {
                   tooltipX = renderWidth - padding.right - totalWidth;
                 }
-                
-                const tooltipY = Math.max(0, padding.top - tooltipHeight - 4); 
+
+                const tooltipY = Math.max(0, padding.top - tooltipHeight - 4);
 
                 return (
                   <g
@@ -571,7 +571,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                     >
                       {tooltipText}
                     </text>
-                    
+
                     {onSelectEntry && (
                       <path
                         d="M0 0 L4 4 L0 8"
