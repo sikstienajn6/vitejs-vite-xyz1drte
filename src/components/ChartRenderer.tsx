@@ -201,7 +201,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     if (visibleCount < 2 || !settings) return [];
     
     const stopList: React.ReactElement[] = [];
-    const windowSize = 2; // Look up to 2 points backwards and 2 points forwards
+    const windowSize = 3; // Look up to 3 points backwards and 3 points forwards
     let lastColor = '';
 
     for (let i = 0; i < visibleCount; i++) {
@@ -210,7 +210,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       
       if (!currentPoint || currentPoint.trend === null) continue;
 
-      let scoreSum = 0;
+      let slopeSum = 0;
       let scoreCount = 0;
 
       for (let offset = -windowSize; offset <= windowSize; offset++) {
@@ -223,23 +223,19 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
           // Calculate slope per step
           const slope = (neighborPoint.trend - currentPoint.trend) / offset;
-
-          let diff: number;
-          if (mode === 'weekly') {
-            diff = Math.abs(slope - settings.weeklyRate);
-          } else {
-            const weeklyEquivalentSlope = slope * 7;
-            diff = Math.abs(weeklyEquivalentSlope - settings.weeklyRate);
-          }
-
-          scoreSum += diff;
+          slopeSum += slope;
           scoreCount++;
         }
       }
 
       if (scoreCount > 0) {
-        const avgDiff = scoreSum / scoreCount;
-        const color = interpolateColor(avgDiff);
+        let averageSlope = slopeSum / scoreCount;
+        if (mode === 'daily') {
+          averageSlope *= 7;
+        }
+
+        const diff = Math.abs(averageSlope - settings.weeklyRate);
+        const color = interpolateColor(diff);
         lastColor = color;
 
         // Calculate offset percentage relative to available width
