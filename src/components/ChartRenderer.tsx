@@ -197,43 +197,66 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   // --- Gradients and visual computations ---
   const stops = useMemo(() => {
-    if (visibleData.length < 2 || !settings) return [];
+    const visibleCount = visibleDataIndices.end - visibleDataIndices.start;
+    if (visibleCount < 2 || !settings) return [];
+    
     const stopList: React.ReactElement[] = [];
+    const windowSize = 2; // Look up to 2 points backwards and 2 points forwards
+    let lastColor = '';
 
-    // The gradient runs across the entire availableWidth.
-    // For fractional offset, we have to map points correctly, or just use visibleData roughly.
-    // Given the gradient is just color blending, mapping roughly to screen % is fine.
+    for (let i = 0; i < visibleCount; i++) {
+      const absIndex = visibleDataIndices.start + i;
+      const currentPoint = allData[absIndex];
+      
+      if (!currentPoint || currentPoint.trend === null) continue;
 
-    for (let i = 0; i < visibleData.length - 1; i++) {
-      const startPoint = visibleData[i];
-      const endPoint = visibleData[i + 1];
+      let scoreSum = 0;
+      let scoreCount = 0;
 
-      if (startPoint.trend === null || endPoint.trend === null) continue;
+      for (let offset = -windowSize; offset <= windowSize; offset++) {
+        if (offset === 0) continue;
+        
+        const neighborIdx = absIndex + offset;
+        if (neighborIdx >= 0 && neighborIdx < allData.length) {
+          const neighborPoint = allData[neighborIdx];
+          if (neighborPoint.trend === null) continue;
 
-      let diff: number;
-      if (mode === 'weekly') {
-        const currentSlope = endPoint.trend - startPoint.trend;
-        const targetSlope = settings.weeklyRate;
-        diff = Math.abs(currentSlope - targetSlope);
-      } else {
-        const dailySlope = endPoint.trend - startPoint.trend;
-        const weeklyEquivalentSlope = dailySlope * 7;
-        diff = Math.abs(weeklyEquivalentSlope - settings.weeklyRate);
+          // Calculate slope per step
+          const slope = (neighborPoint.trend - currentPoint.trend) / offset;
+
+          let diff: number;
+          if (mode === 'weekly') {
+            diff = Math.abs(slope - settings.weeklyRate);
+          } else {
+            const weeklyEquivalentSlope = slope * 7;
+            diff = Math.abs(weeklyEquivalentSlope - settings.weeklyRate);
+          }
+
+          scoreSum += diff;
+          scoreCount++;
+        }
       }
 
-      const color = interpolateColor(diff);
-      const absIndex = visibleDataIndices.start + i;
-      
-      // Calculate where `absIndex + 0.5` falls on the screen as a %
-      const xPixel = getX(absIndex + 0.5) - padding.left;
-      const offsetPercent = Math.max(0, Math.min(100, (xPixel / availableWidth) * 100));
+      if (scoreCount > 0) {
+        const avgDiff = scoreSum / scoreCount;
+        const color = interpolateColor(avgDiff);
+        lastColor = color;
 
-      if (stopList.length === 0) stopList.push(<stop key="start" offset="0%" stopColor={color} />);
-      stopList.push(<stop key={`mid-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
-      if (i === visibleData.length - 2) stopList.push(<stop key="end" offset="100%" stopColor={color} />);
+        // Calculate offset percentage relative to available width
+        const xPixel = getX(absIndex) - padding.left;
+        const offsetPercent = Math.max(0, Math.min(100, (xPixel / availableWidth) * 100));
+
+        if (stopList.length === 0) stopList.push(<stop key="start" offset="0%" stopColor={color} />);
+        stopList.push(<stop key={`point-${i}`} offset={`${offsetPercent}%`} stopColor={color} />);
+      }
     }
+
+    if (stopList.length > 0 && lastColor !== '') {
+      stopList.push(<stop key="end" offset="100%" stopColor={lastColor} />);
+    }
+
     return stopList;
-  }, [visibleData, settings, mode, getX, availableWidth, padding.left, visibleDataIndices.start]);
+  }, [visibleDataIndices.start, visibleDataIndices.end, settings, mode, getX, availableWidth, padding.left, allData]);
 
 
 
