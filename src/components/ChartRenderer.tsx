@@ -342,13 +342,25 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
     const extendTunnel = (px: number) => {
       const virtualI = currLeft + (px - padding.left - 10) / pxPerPoint;
-      const i0 = Math.max(0, Math.min(N - 1, Math.floor(virtualI)));
-      const i1 = Math.max(0, Math.min(N - 1, Math.ceil(virtualI)));
+      let dateMs: number;
       
-      let dateMs = allData[i0].dateObj.getTime();
-      if (i1 > i0) {
-          const t = virtualI - i0;
-          dateMs = allData[i0].dateObj.getTime() * (1 - t) + allData[i1].dateObj.getTime() * t;
+      if (N <= 1) {
+          dateMs = N === 1 ? allData[0].dateObj.getTime() : new Date().getTime();
+      } else if (virtualI < 0) {
+          const dt = allData[1].dateObj.getTime() - allData[0].dateObj.getTime();
+          dateMs = allData[0].dateObj.getTime() + virtualI * dt;
+      } else if (virtualI > N - 1) {
+          const dt = allData[N - 1].dateObj.getTime() - allData[N - 2].dateObj.getTime();
+          dateMs = allData[N - 1].dateObj.getTime() + (virtualI - (N - 1)) * dt;
+      } else {
+          const i0 = Math.floor(virtualI);
+          const i1 = Math.ceil(virtualI);
+          if (i0 === i1) {
+              dateMs = allData[i0].dateObj.getTime();
+          } else {
+              const t = virtualI - i0;
+              dateMs = allData[i0].dateObj.getTime() * (1 - t) + allData[i1].dateObj.getTime() * t;
+          }
       }
 
       const diffDays = (dateMs - projection.anchorDate.getTime()) / msPerDay;
