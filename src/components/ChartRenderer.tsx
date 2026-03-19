@@ -197,15 +197,17 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   // --- Gradients and visual computations ---
   const stops = useMemo(() => {
-    const visibleCount = visibleDataIndices.end - visibleDataIndices.start;
+    const startIdx = Math.max(0, visibleDataIndices.start - 1);
+    const endIdx = Math.min(allData.length, visibleDataIndices.end + 1);
+    const visibleCount = endIdx - startIdx;
     if (visibleCount < 2 || !settings) return [];
 
     const stopList: React.ReactElement[] = [];
-    const windowSize = mode === 'daily' ? 4 : 2; // Look up up to 2 or 4 points backwards and forwards
+    const windowSize = mode === 'daily' ? 4 : 1; // Look up up to 2 or 4 points backwards and forwards
     let lastColor = '';
 
     for (let i = 0; i < visibleCount; i++) {
-      const absIndex = visibleDataIndices.start + i;
+      const absIndex = startIdx + i;
       const currentPoint = allData[absIndex];
 
       if (!currentPoint || currentPoint.trend === null) continue;
@@ -319,16 +321,45 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   }
 
   let trendPath = '';
-  if (visibleData.length > 1) {
-    let lastValidAbs = -1;
-    for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
+  if (allData.length > 1) {
+    const startIdx = Math.max(0, visibleDataIndices.start - 1);
+    const endIdx = Math.min(allData.length, visibleDataIndices.end + 1);
+
+    if (startIdx === 0) {
+      const p0 = allData[0];
+      const p1 = allData[1];
+      if (p0 && p0.trend !== null && p1 && p1.trend !== null) {
+         const x0 = getX(0), y0 = getY(p0.trend);
+         const x1 = getX(1), y1 = getY(p1.trend);
+         if (x1 !== x0) {
+             const m = (y1 - y0) / (x1 - x0);
+             const yEdge = y0 - m * (x0 - padding.left);
+             trendPath += `M ${padding.left},${yEdge} `;
+         }
+      }
+    }
+
+    for (let i = startIdx; i < endIdx; i++) {
       const d = allData[i];
       if (d.trend === null) continue;
       const x = getX(i);
       const y = getY(d.trend);
-      if (lastValidAbs === -1) trendPath += `M ${x},${y} `;
+      if (trendPath === '') trendPath += `M ${x},${y} `;
       else trendPath += `L ${x},${y} `;
-      lastValidAbs = i;
+    }
+
+    if (endIdx === allData.length) {
+      const pLast = allData[N - 1];
+      const pPrev = allData[N - 2];
+      if (pLast && pLast.trend !== null && pPrev && pPrev.trend !== null) {
+         const xLast = getX(N - 1), yLast = getY(pLast.trend);
+         const xPrev = getX(N - 2), yPrev = getY(pPrev.trend);
+         if (xLast !== xPrev) {
+             const m = (yLast - yPrev) / (xLast - xPrev);
+             const yEdge = yLast + m * ((renderWidth - padding.right) - xLast);
+             trendPath += `L ${renderWidth - padding.right},${yEdge} `;
+         }
+      }
     }
   }
 
@@ -343,34 +374,34 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const extendTunnel = (px: number) => {
       const virtualI = currLeft + (px - padding.left - 10) / pxPerPoint;
       let dateMs: number;
-      
+
       if (N <= 1) {
-          dateMs = N === 1 ? allData[0].dateObj.getTime() : new Date().getTime();
+        dateMs = N === 1 ? allData[0].dateObj.getTime() : new Date().getTime();
       } else if (virtualI < 0) {
-          const dt = allData[1].dateObj.getTime() - allData[0].dateObj.getTime();
-          dateMs = allData[0].dateObj.getTime() + virtualI * dt;
+        const dt = allData[1].dateObj.getTime() - allData[0].dateObj.getTime();
+        dateMs = allData[0].dateObj.getTime() + virtualI * dt;
       } else if (virtualI > N - 1) {
-          const dt = allData[N - 1].dateObj.getTime() - allData[N - 2].dateObj.getTime();
-          dateMs = allData[N - 1].dateObj.getTime() + (virtualI - (N - 1)) * dt;
+        const dt = allData[N - 1].dateObj.getTime() - allData[N - 2].dateObj.getTime();
+        dateMs = allData[N - 1].dateObj.getTime() + (virtualI - (N - 1)) * dt;
       } else {
-          const i0 = Math.floor(virtualI);
-          const i1 = Math.ceil(virtualI);
-          if (i0 === i1) {
-              dateMs = allData[i0].dateObj.getTime();
-          } else {
-              const t = virtualI - i0;
-              dateMs = allData[i0].dateObj.getTime() * (1 - t) + allData[i1].dateObj.getTime() * t;
-          }
+        const i0 = Math.floor(virtualI);
+        const i1 = Math.ceil(virtualI);
+        if (i0 === i1) {
+          dateMs = allData[i0].dateObj.getTime();
+        } else {
+          const t = virtualI - i0;
+          dateMs = allData[i0].dateObj.getTime() * (1 - t) + allData[i1].dateObj.getTime() * t;
+        }
       }
 
       const diffDays = (dateMs - projection.anchorDate.getTime()) / msPerDay;
       const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-      
+
       return {
-         x: px,
-         y: getY(idealY),
-         yUpper: clampToAxis(getY(idealY + tunnelTolerance)),
-         yLower: clampToAxis(getY(idealY - tunnelTolerance))
+        x: px,
+        y: getY(idealY),
+        yUpper: clampToAxis(getY(idealY + tunnelTolerance)),
+        yLower: clampToAxis(getY(idealY - tunnelTolerance))
       };
     };
 
@@ -435,7 +466,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
             <rect x={padding.left} y={0} width={availableWidth} height={height} />
           </clipPath>
           {stops.length > 0 && (
-            <linearGradient id="trendGradient" x1="0" y1="0" x2="100%" y2="0">
+            <linearGradient id="trendGradient" x1={padding.left} y1="0" x2={renderWidth - padding.right} y2="0" gradientUnits="userSpaceOnUse">
               {stops}
             </linearGradient>
           )}
@@ -589,7 +620,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 }
 
                 const tooltipY = Math.max(0, padding.top - tooltipHeight - 4);
-                
+
                 const textCenterX = tooltipX + totalWidth / 2 - (onSelectEntry ? 6 : 0) + (hasComment ? 6 : 0);
                 const iconX = textCenterX - stringWidth / 2 - 14;
 
