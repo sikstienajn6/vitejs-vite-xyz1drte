@@ -31,9 +31,12 @@ export function StatCards({ weeklyData, currentTrendRate, settings }: StatCardsP
       </div>
       <div className="bg-slate-900 p-4 rounded-2xl shadow-sm border border-slate-800">
         <p className="text-slate-400 text-xs font-medium uppercase mb-1">Current Rate</p>
-        <div className={`flex items-center gap-1 text-lg font-bold truncate ${rateColor}`}>
-          {currentTrendRate > 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-          {Math.abs(currentTrendRate).toFixed(2)} kg
+        <div className={`flex items-center gap-1.5 text-2xl font-bold truncate ${rateColor}`}>
+          {currentTrendRate > 0 ? <TrendingUp size={22} className="opacity-80" /> : <TrendingDown size={22} className="opacity-80" />}
+          <span>
+            {Math.abs(currentTrendRate).toFixed(2)}
+            <span className="text-sm font-normal opacity-70 ml-1">kg</span>
+          </span>
         </div>
       </div>
     </div>

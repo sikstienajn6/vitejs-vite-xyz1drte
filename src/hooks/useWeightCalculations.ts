@@ -129,6 +129,7 @@ export function useWeightCalculations(
         weekLabel: w.weekLabel,
         actual: w.rawAvg,
         trend: w.actual,
+        entries: w.entries,
       }));
     } else {
       const now = new Date();

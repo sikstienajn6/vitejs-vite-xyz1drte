@@ -67,11 +67,11 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const padding = { top: 20, bottom: 24, left: 32, right: 16 };
   const availableWidth = renderWidth - padding.left - padding.right;
 
-  // Keep points 5px away from the clipping edges so they don't get cut off
-  const usableWidth = Math.max(10, availableWidth - 10);
+  // Keep points 10px away from the clipping edges so they don't get cut off
+  const usableWidth = Math.max(10, availableWidth - 20);
   const pxPerPoint = usableWidth / Math.max(1, W - 1);
 
-  const getX = useCallback((i: number) => padding.left + 5 + (i - currLeft) * pxPerPoint, [currLeft, pxPerPoint, padding.left]);
+  const getX = useCallback((i: number) => padding.left + 10 + (i - currLeft) * pxPerPoint, [currLeft, pxPerPoint, padding.left]);
 
   // Visible data slice for rendering and Y-axis min/max
   const visibleDataIndices = useMemo(() => {
@@ -201,7 +201,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     if (visibleCount < 2 || !settings) return [];
 
     const stopList: React.ReactElement[] = [];
-    const windowSize = 4; // Look up to 3 points backwards and 3 points forwards
+    const windowSize = mode === 'daily' ? 4 : 2; // Look up up to 2 or 4 points backwards and forwards
     let lastColor = '';
 
     for (let i = 0; i < visibleCount; i++) {
@@ -340,6 +340,33 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const upperPoints: [number, number][] = [];
     const lowerPoints: [number, number][] = [];
 
+    const extendTunnel = (px: number) => {
+      const virtualI = currLeft + (px - padding.left - 10) / pxPerPoint;
+      const i0 = Math.max(0, Math.min(N - 1, Math.floor(virtualI)));
+      const i1 = Math.max(0, Math.min(N - 1, Math.ceil(virtualI)));
+      
+      let dateMs = allData[i0].dateObj.getTime();
+      if (i1 > i0) {
+          const t = virtualI - i0;
+          dateMs = allData[i0].dateObj.getTime() * (1 - t) + allData[i1].dateObj.getTime() * t;
+      }
+
+      const diffDays = (dateMs - projection.anchorDate.getTime()) / msPerDay;
+      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+      
+      return {
+         x: px,
+         y: getY(idealY),
+         yUpper: clampToAxis(getY(idealY + tunnelTolerance)),
+         yLower: clampToAxis(getY(idealY - tunnelTolerance))
+      };
+    };
+
+    const leftEdge = extendTunnel(padding.left);
+    projectionPath += `M ${leftEdge.x},${leftEdge.y} `;
+    upperPoints.push([leftEdge.x, leftEdge.yUpper]);
+    lowerPoints.push([leftEdge.x, leftEdge.yLower]);
+
     for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
       const d = allData[i];
       const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
@@ -347,14 +374,18 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       const x = getX(i);
       const y = getY(idealY);
 
-      if (i === visibleDataIndices.start) projectionPath += `M ${x},${y} `;
-      else projectionPath += `L ${x},${y} `;
+      projectionPath += `L ${x},${y} `;
 
       const yUpper = clampToAxis(getY(idealY + tunnelTolerance));
       const yLower = clampToAxis(getY(idealY - tunnelTolerance));
       upperPoints.push([x, yUpper]);
       lowerPoints.push([x, yLower]);
     }
+
+    const rightEdge = extendTunnel(renderWidth - padding.right);
+    projectionPath += `L ${rightEdge.x},${rightEdge.y} `;
+    upperPoints.push([rightEdge.x, rightEdge.yUpper]);
+    lowerPoints.push([rightEdge.x, rightEdge.yLower]);
 
     if (upperPoints.length > 0) {
       tunnelPath = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
@@ -529,9 +560,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                   ? (activePoint.weekLabel || activePoint.label)
                   : formatDate(activePoint.label);
 
+                const hasComment = mode === 'daily'
+                  ? !!activePoint.originalEntry?.comment
+                  : !!activePoint.entries?.some(e => e.comment);
+
                 const tooltipText = `${tooltipWeight} kg · ${tooltipDate}`;
                 const stringWidth = tooltipText.length * 5.5;
-                const totalWidth = onSelectEntry ? stringWidth + 32 : stringWidth + 24;
+                const commentIconWidth = hasComment ? 16 : 0;
+                const totalWidth = onSelectEntry ? stringWidth + 32 + commentIconWidth : stringWidth + 24 + commentIconWidth;
                 const tooltipHeight = 28;
 
                 let tooltipX = activeXPos - totalWidth / 2;
@@ -541,6 +577,9 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 }
 
                 const tooltipY = Math.max(0, padding.top - tooltipHeight - 4);
+                
+                const textCenterX = tooltipX + totalWidth / 2 - (onSelectEntry ? 6 : 0) + (hasComment ? 6 : 0);
+                const iconX = textCenterX - stringWidth / 2 - 14;
 
                 return (
                   <g
@@ -561,8 +600,21 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       strokeWidth="1"
                       className="transition-colors group-hover:fill-slate-800"
                     />
+
+                    {hasComment && (
+                      <path
+                        d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+                        transform={`translate(${iconX}, ${tooltipY + 7}) scale(0.55)`}
+                        fill="none"
+                        stroke="#60a5fa"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+
                     <text
-                      x={tooltipX + totalWidth / 2 - (onSelectEntry ? 6 : 0)}
+                      x={textCenterX}
                       y={tooltipY + 18}
                       fontSize="10"
                       fill="#f8fafc"
@@ -575,7 +627,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                     {onSelectEntry && (
                       <path
                         d="M0 0 L4 4 L0 8"
-                        transform={`translate(${tooltipX + totalWidth / 2 + stringWidth / 2 - 2}, ${tooltipY + 10})`}
+                        transform={`translate(${tooltipX + totalWidth - 14}, ${tooltipY + 10})`}
                         fill="none"
                         stroke="#94a3b8"
                         strokeWidth="1.5"

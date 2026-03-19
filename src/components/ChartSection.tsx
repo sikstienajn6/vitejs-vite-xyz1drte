@@ -42,30 +42,32 @@ export function ChartSection({
 }: ChartSectionProps) {
   return (
     <section className="flex flex-col" ref={containerRef}>
-      <div className="flex justify-between items-end mb-2 px-1 gap-1">
-        <div className="shrink-0">
-          <div className="flex items-center gap-1">
-            <h2 className="text-sm font-semibold text-slate-300">Trend Adherence</h2>
-            <button
-              onClick={() => setShowExplanation(!showExplanation)}
-              className="text-slate-500 hover:text-blue-400 transition-colors"
-            >
-              <Info size={13} />
-            </button>
-          </div>
+      <div className="flex justify-between mb-3 px-1 gap-3">
+        {/* Date Range Selector */}
+        <div className="relative bg-slate-800/80 p-1 rounded-xl flex flex-1 text-xs font-bold items-center backdrop-blur-sm border border-slate-700/50">
+          <div 
+            className="absolute top-1 bottom-1 rounded-lg bg-slate-600 shadow-sm transition-all duration-300 ease-out" 
+            style={{ 
+              width: 'calc((100% - 8px) / 3)',
+              transform: `translateX(${filterRange === '1M' ? '0' : filterRange === '3M' ? '100%' : '200%'})` 
+            }} 
+          />
+          <button onClick={(e) => { e.preventDefault(); setFilterRange('1M'); }} className={`relative flex-1 z-10 py-1.5 text-center transition-colors ${filterRange === '1M' ? 'text-white' : 'text-slate-400 hover:text-slate-300'}`}>1M</button>
+          <button onClick={(e) => { e.preventDefault(); setFilterRange('3M'); }} className={`relative flex-1 z-10 py-1.5 text-center transition-colors ${filterRange === '3M' ? 'text-white' : 'text-slate-400 hover:text-slate-300'}`}>3M</button>
+          <button onClick={(e) => { e.preventDefault(); setFilterRange('ALL'); }} className={`relative flex-1 z-10 py-1.5 text-center transition-colors ${filterRange === 'ALL' ? 'text-white' : 'text-slate-400 hover:text-slate-300'}`}>ALL</button>
         </div>
 
-        <div className="flex gap-1 shrink-0">
-          <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
-            <button onClick={() => setFilterRange('1M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '1M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>1M</button>
-            <button onClick={() => setFilterRange('3M')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === '3M' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>3M</button>
-            <button onClick={() => setFilterRange('ALL')} className={`px-1.5 py-1 rounded-md transition-all ${filterRange === 'ALL' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>ALL</button>
-          </div>
-
-          <div className="bg-slate-800 p-0.5 rounded-lg flex text-[9px] font-bold">
-            <button onClick={() => setChartMode('weekly')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'weekly' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Week</button>
-            <button onClick={() => setChartMode('daily')} className={`px-1.5 py-1 rounded-md transition-all ${chartMode === 'daily' ? 'bg-slate-600 text-white' : 'text-slate-400'}`}>Day</button>
-          </div>
+        {/* Mode Selector */}
+        <div className="relative bg-slate-800/80 p-1 rounded-xl flex flex-1 text-xs font-bold items-center backdrop-blur-sm border border-slate-700/50">
+          <div 
+            className="absolute top-1 bottom-1 rounded-lg bg-slate-600 shadow-sm transition-all duration-300 ease-out" 
+            style={{ 
+              width: 'calc((100% - 8px) / 2)',
+              transform: `translateX(${chartMode === 'weekly' ? '0' : '100%'})` 
+            }} 
+          />
+          <button onClick={(e) => { e.preventDefault(); setChartMode('weekly'); }} className={`relative flex-1 z-10 py-1.5 text-center transition-colors ${chartMode === 'weekly' ? 'text-white' : 'text-slate-400 hover:text-slate-300'}`}>WEEK</button>
+          <button onClick={(e) => { e.preventDefault(); setChartMode('daily'); }} className={`relative flex-1 z-10 py-1.5 text-center transition-colors ${chartMode === 'daily' ? 'text-white' : 'text-slate-400 hover:text-slate-300'}`}>DAY</button>
         </div>
       </div>
 
@@ -82,17 +84,25 @@ export function ChartSection({
       />
 
       <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none">
-        <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 w-5/6 mx-auto">
-          <div className="flex items-center justify-center gap-1">
-            <div className="w-3 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500 rounded-full"></div>Trend
+        <div className="flex items-center justify-between mx-auto w-full px-4">
+          <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 flex-1">
+            <div className="flex items-center justify-center gap-1">
+              <div className="w-3 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500 rounded-full"></div>Trend
+            </div>
+            <div className="flex items-center justify-center gap-1">
+              <div className="w-3 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
+              Tunnel
+            </div>
+            <div className="flex items-center justify-center gap-1">
+              <div className="w-2 h-2 rounded-full bg-emerald-500"></div>Readings
+            </div>
           </div>
-          <div className="flex items-center justify-center gap-1">
-            <div className="w-3 h-2 rounded-full bg-emerald-500/20 border border-emerald-500/40"></div>
-            Tunnel
-          </div>
-          <div className="flex items-center justify-center gap-1">
-            <div className="w-2 h-2 rounded-full bg-emerald-500"></div>Readings
-          </div>
+          <button
+            onClick={() => setShowExplanation(!showExplanation)}
+            className="text-slate-500 hover:text-blue-400 transition-colors ml-2"
+          >
+            <Info size={14} />
+          </button>
         </div>
 
         {showExplanation && (
