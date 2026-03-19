@@ -447,7 +447,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   return (
     <div
-      className={`w-full overflow-hidden rounded-t-xl bg-slate-900 border-x border-t border-slate-800 shadow-sm select-none`}
+      className={`w-full overflow-hidden select-none`}
       style={{ height: height }}
     >
       <svg

@@ -41,8 +41,8 @@ export function ChartSection({
   onSelectEntry,
 }: ChartSectionProps) {
   return (
-    <section className="flex flex-col" ref={containerRef}>
-      <div className="flex justify-between mb-3 px-1 gap-3">
+    <section className="flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-sm overflow-hidden" ref={containerRef}>
+      <div className="flex justify-between p-3 pb-1 gap-3 shrink-0">
         {/* Date Range Selector */}
         <div className="relative bg-slate-800/80 p-1 rounded-xl flex flex-1 text-xs font-bold items-center backdrop-blur-sm border border-slate-700/50">
           <div 
@@ -83,8 +83,8 @@ export function ChartSection({
         onSelectEntry={onSelectEntry}
       />
 
-      <div className="bg-slate-900 border-x border-b border-slate-800 rounded-b-xl p-2 space-y-2 select-none">
-        <div className="flex items-center justify-between mx-auto w-full px-4">
+      <div className="p-3 pt-2 space-y-2 select-none shrink-0 border-t border-slate-800/50">
+        <div className="flex items-center justify-between mx-auto w-full px-2">
           <div className="grid grid-cols-3 gap-2 text-[10px] font-bold text-center text-slate-400 flex-1">
             <div className="flex items-center justify-center gap-1">
               <div className="w-3 h-0.5 bg-gradient-to-r from-emerald-500 via-amber-400 to-red-500 rounded-full"></div>Trend
