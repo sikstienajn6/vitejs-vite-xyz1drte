@@ -179,7 +179,6 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = true;
     scrubStartPosRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
-    isTooltipTextBoxRef.current = e.target instanceof Element && e.target.closest('[data-is-text="true"]') !== null;
   }, []);
 
   const handleTooltipPointerMove = useCallback((e: React.PointerEvent) => {
@@ -238,7 +237,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const dy = Math.abs(e.clientY - scrubStartPosRef.current.y);
     const dt = Date.now() - scrubStartPosRef.current.time;
     
-    if (dx < 20 && dy < 20 && dt < 500) {
+    if (dx < 40 && dy < 40 && dt < 1000) {
       if (isTooltipTextBoxRef.current) {
         handleTooltipClick();
       }
@@ -693,9 +692,13 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       height={height - padding.top - padding.bottom}
                       fill="transparent"
                       className="cursor-ew-resize"
+                      onPointerDown={() => { isTooltipTextBoxRef.current = false; }}
                     />
 
-                    <g data-is-text="true">
+                    <g 
+                      data-is-text="true"
+                      onPointerDown={() => { isTooltipTextBoxRef.current = true; }}
+                    >
                       <rect
                         x={tooltipX}
                         y={tooltipY}
