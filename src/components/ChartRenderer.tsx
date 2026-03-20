@@ -23,7 +23,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   // Tooltip scrubbing refs
   const isScrubbing = useRef(false);
-  const scrubStartDateRef = useRef<string | null>(null);
+  const scrubStartPosRef = useRef({ x: 0, y: 0, time: 0 });
 
   // Touch tracking refs
   const lastTouchXRef = useRef(0);
@@ -175,10 +175,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   const handleTooltipPointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = true;
-    scrubStartDateRef.current = activeDateStr;
-  }, [activeDateStr]);
+    scrubStartPosRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
+  }, []);
 
   const handleTooltipPointerMove = useCallback((e: React.PointerEvent) => {
     if (!isScrubbing.current) return;
@@ -229,12 +229,17 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   const handleTooltipPointerUp = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
-    e.currentTarget.releasePointerCapture(e.pointerId);
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = false;
-    if (scrubStartDateRef.current === activeDateStr) {
+    
+    const dx = Math.abs(e.clientX - scrubStartPosRef.current.x);
+    const dy = Math.abs(e.clientY - scrubStartPosRef.current.y);
+    const dt = Date.now() - scrubStartPosRef.current.time;
+    
+    if (dx < 20 && dy < 20 && dt < 500) {
       handleTooltipClick();
     }
-  }, [activeDateStr, handleTooltipClick]);
+  }, [handleTooltipClick]);
 
   // --- Gradients and visual computations ---
   const stops = useMemo(() => {
@@ -695,7 +700,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       fill="#0f172a"
                       stroke="#334155"
                       strokeWidth="1"
-                      className="transition-colors group-hover:fill-slate-800"
+                      className="transition-colors"
                     />
 
                     {hasComment && (
@@ -730,7 +735,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                         strokeWidth="1.5"
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        className="transition-colors group-hover:stroke-blue-400"
+                        className="transition-colors"
                       />
                     )}
                   </g>

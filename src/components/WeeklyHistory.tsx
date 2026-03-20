@@ -48,7 +48,7 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
             const isExpanded = expandedWeeks.includes(item.weekId);
             const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta, settings);
             return (
-              <div key={item.weekId} className="transition-colors hover:bg-slate-800/50">
+              <div key={item.weekId} className="transition-colors">
                 <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => onToggleWeek(item.weekId)}>
                   <div className="flex flex-col">
                     <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
