@@ -732,7 +732,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       onPointerDown={() => { targetWasTextRef.current = false; }}
                     />
 
-                    <g>
+                    <g
+                      style={{ touchAction: 'none', cursor: 'pointer' }}
+                      onPointerDown={() => { targetWasTextRef.current = true; }}
+                      onClick={(e) => {
+                         e.stopPropagation();
+                         handleTooltipClick();
+                      }}
+                    >
                       <rect
                         x={tooltipX}
                         y={tooltipY}
@@ -754,6 +761,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                         strokeWidth="2"
                         strokeLinecap="round"
                         strokeLinejoin="round"
+                        pointerEvents="none"
                       />
                     )}
 
@@ -764,6 +772,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       fill="#f8fafc"
                       textAnchor="middle"
                       fontWeight="bold"
+                      pointerEvents="none"
                     >
                       {tooltipText}
                     </text>
@@ -778,6 +787,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         className="transition-colors"
+                        pointerEvents="none"
                       />
                     )}
 
@@ -791,12 +801,6 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       rx="6"
                       fill="rgba(0,0,0,0.01)"
                       pointerEvents="all"
-                      onPointerDown={() => { targetWasTextRef.current = true; }}
-                      onClick={(e) => {
-                         e.stopPropagation();
-                         handleTooltipClick();
-                      }}
-                      style={{ touchAction: 'none', cursor: 'pointer' }}
                     />
                     </g>
                   </g>
