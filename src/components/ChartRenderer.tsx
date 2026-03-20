@@ -24,7 +24,8 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   // Tooltip scrubbing refs
   const isScrubbing = useRef(false);
   const scrubStartPosRef = useRef({ x: 0, y: 0, time: 0 });
-  const isTooltipTextBoxRef = useRef(false);
+  const scrubOffsetRef = useRef(0);
+  const textGroupRef = useRef<SVGGElement>(null);
 
   // Touch tracking refs
   const lastTouchXRef = useRef(0);
@@ -179,20 +180,28 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = true;
     scrubStartPosRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
-  }, []);
+    
+    const activeIndex = activeDateStr ? allData.findIndex(d => d.label === activeDateStr) : -1;
+    const activeX = activeIndex >= 0 ? getX(activeIndex) : e.clientX;
+    scrubOffsetRef.current = activeX - e.clientX;
+  }, [activeDateStr, allData, getX]);
 
   const handleTooltipPointerMove = useCallback((e: React.PointerEvent) => {
     if (!isScrubbing.current) return;
-    const label = findNearestDateStr(e.clientX);
+    
+    const dx = Math.abs(e.clientX - scrubStartPosRef.current.x);
+    // Give a 10px deadzone to prevent jittering when actively touching the text box to click
+    if (dx < 10 && textGroupRef.current?.contains(e.target as Node)) return;
+
+    const virtualX = e.clientX + scrubOffsetRef.current;
+    const label = findNearestDateStr(virtualX);
     if (label && label !== activeDateStr) {
       setActiveDateStr(label);
     }
-  }, [findNearestDateStr, activeDateStr]);
+  }, [findNearestDateStr, activeDateStr, textGroupRef, scrubOffsetRef]);
 
-  const handleTooltipClick = useCallback(() => {
-    if (!activeDateStr || !onSelectEntry) return;
-    const point = allData.find(d => d.label === activeDateStr);
-    if (!point) return;
+  const openModalForPoint = useCallback((point: ChartPoint) => {
+    if (!onSelectEntry) return;
 
     if (mode === 'daily') {
       if (point.originalEntry) {
@@ -226,7 +235,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       };
       onSelectEntry(entry);
     }
-  }, [activeDateStr, allData, mode, onSelectEntry]);
+  }, [mode, onSelectEntry]);
+
+  const handleTooltipClick = useCallback(() => {
+    if (!activeDateStr) return;
+    const point = allData.find(d => d.label === activeDateStr);
+    if (!point) return;
+    openModalForPoint(point);
+  }, [activeDateStr, allData, openModalForPoint]);
 
   const handleTooltipPointerUp = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
@@ -238,7 +254,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const dt = Date.now() - scrubStartPosRef.current.time;
     
     if (dx < 40 && dy < 40 && dt < 1000) {
-      if (isTooltipTextBoxRef.current) {
+      if (textGroupRef.current?.contains(e.target as Node)) {
         handleTooltipClick();
       }
     }
@@ -576,16 +592,31 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
               : !!d.entries?.some(e => e.comment);
 
             return (
-              <circle
-                key={idx}
-                cx={px}
-                cy={py}
-                r={isActive ? 5 : (expanded ? 3.5 : 2)}
-                fill={isActive ? "#ffffff" : "#10b981"}
-                opacity={isActive ? "1" : (expanded ? "0.9" : "0.6")}
-                stroke={hasComment ? "#3b82f6" : undefined}
-                strokeWidth={hasComment ? 1 : undefined}
-              />
+              <g key={idx}>
+                <circle
+                  cx={px}
+                  cy={py}
+                  r={isActive ? 5 : (expanded ? 3.5 : 2)}
+                  fill={isActive ? "#ffffff" : "#10b981"}
+                  opacity={isActive ? "1" : (expanded ? "0.9" : "0.6")}
+                  stroke={hasComment ? "#3b82f6" : undefined}
+                  strokeWidth={hasComment ? 1 : undefined}
+                />
+                <circle
+                  cx={px}
+                  cy={py}
+                  r={15}
+                  fill="transparent"
+                  style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
+                  onPointerUp={(e) => {
+                    if (isSwiping.current || isScrubbing.current) return;
+                    e.stopPropagation();
+                    const point = allData[idx];
+                    setActiveDateStr(point.label);
+                    openModalForPoint(point);
+                  }}
+                />
+              </g>
             );
           })}
 
@@ -692,13 +723,9 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       height={height - padding.top - padding.bottom}
                       fill="transparent"
                       className="cursor-ew-resize"
-                      onPointerDown={() => { isTooltipTextBoxRef.current = false; }}
                     />
 
-                    <g 
-                      data-is-text="true"
-                      onPointerDown={() => { isTooltipTextBoxRef.current = true; }}
-                    >
+                    <g ref={textGroupRef}>
                       <rect
                         x={tooltipX}
                         y={tooltipY}
