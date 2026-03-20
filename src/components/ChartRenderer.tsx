@@ -108,6 +108,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   // --- Touch interaction ---
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (isScrubbing.current) return;
     const touch = e.touches[0];
     lastTouchXRef.current = touch.clientX;
     lastTouchYRef.current = touch.clientY;
@@ -119,6 +120,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   }, []);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (isScrubbing.current) return;
     const touch = e.touches[0];
     const dx = touch.clientX - lastTouchXRef.current;
 
@@ -674,6 +676,16 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                     onPointerCancel={handleTooltipPointerUp}
                     className="group"
                   >
+                    {/* Invisible hit area covering the entire vertical dashed line height */}
+                    <rect
+                      x={activeXPos - 20}
+                      y={padding.top}
+                      width={40}
+                      height={height - padding.top - padding.bottom}
+                      fill="transparent"
+                      className="cursor-ew-resize"
+                    />
+
                     <rect
                       x={tooltipX}
                       y={tooltipY}
