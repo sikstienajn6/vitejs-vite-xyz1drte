@@ -607,13 +607,12 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                   cy={py}
                   r={15}
                   fill="transparent"
-                  style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
+                  style={{ cursor: 'pointer' }}
                   onPointerUp={(e) => {
                     if (isSwiping.current || isScrubbing.current) return;
                     e.stopPropagation();
                     const point = allData[idx];
                     setActiveDateStr(point.label);
-                    openModalForPoint(point);
                   }}
                 />
               </g>
