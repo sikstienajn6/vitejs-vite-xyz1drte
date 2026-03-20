@@ -35,17 +35,41 @@ export function EntryDetailModal({ entry, onClose }: EntryDetailModalProps) {
             </div>
           )}
 
-          {entry.comment && (
+          {entry.comment && !entry.id.startsWith('weekly') && (
             <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
               <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
-                <MessageSquare size={12} /> {entry.id.startsWith('weekly') ? 'Comments this week' : 'Comment'}
+                <MessageSquare size={12} /> Comment
               </p>
-              <p className="text-sm text-slate-200 italic whitespace-pre-wrap">"{entry.comment}"</p>
+              <p className="text-sm text-slate-200 italic whitespace-pre-wrap">{entry.comment}</p>
+            </div>
+          )}
+
+          {entry.id.startsWith('weekly') && entry.comment && (
+            <div className="flex flex-col gap-2 mt-2">
+              <p className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-2 px-1">
+                <MessageSquare size={12} /> Comments this week
+              </p>
+              {(() => {
+                 try {
+                   const parsed = JSON.parse(entry.comment);
+                   return parsed.map((c: any, i: number) => (
+                      <div key={i} className="bg-slate-800/50 p-3 rounded-xl border border-slate-800/80">
+                         <div className="flex justify-between items-center mb-2">
+                            <span className="text-xs font-bold text-slate-400">{formatDate(c.date)}</span>
+                            <span className="text-xs font-bold text-slate-300">{c.weight.toFixed(1)} kg</span>
+                         </div>
+                         <p className="text-sm text-slate-200">{c.text}</p>
+                      </div>
+                   ));
+                 } catch(e) {
+                   return null;
+                 }
+              })()}
             </div>
           )}
 
           {entry.id.startsWith('weekly') && (
-            <div className="text-center text-sm text-slate-500 italic">
+            <div className="text-center text-sm text-slate-500 italic mt-2">
               Weekly Average
             </div>
           )}

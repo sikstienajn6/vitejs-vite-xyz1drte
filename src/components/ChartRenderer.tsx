@@ -24,6 +24,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   // Tooltip scrubbing refs
   const isScrubbing = useRef(false);
   const scrubStartPosRef = useRef({ x: 0, y: 0, time: 0 });
+  const isTooltipTextBoxRef = useRef(false);
 
   // Touch tracking refs
   const lastTouchXRef = useRef(0);
@@ -178,6 +179,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = true;
     scrubStartPosRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
+    isTooltipTextBoxRef.current = e.target instanceof Element && e.target.closest('[data-is-text="true"]') !== null;
   }, []);
 
   const handleTooltipPointerMove = useCallback((e: React.PointerEvent) => {
@@ -210,9 +212,9 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       if (point.entries) {
         const comments = point.entries
           .filter(e => e.comment)
-          .map(e => `${formatDate(e.date)}: ${e.comment}`);
+          .map(e => ({ date: e.date, weight: e.weight, text: e.comment }));
         if (comments.length > 0) {
-           weeklyComment = comments.join('\n');
+           weeklyComment = JSON.stringify(comments);
         }
       }
 
@@ -237,7 +239,9 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const dt = Date.now() - scrubStartPosRef.current.time;
     
     if (dx < 20 && dy < 20 && dt < 500) {
-      handleTooltipClick();
+      if (isTooltipTextBoxRef.current) {
+        handleTooltipClick();
+      }
     }
   }, [handleTooltipClick]);
 
@@ -691,10 +695,11 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       className="cursor-ew-resize"
                     />
 
-                    <rect
-                      x={tooltipX}
-                      y={tooltipY}
-                      width={totalWidth}
+                    <g data-is-text="true">
+                      <rect
+                        x={tooltipX}
+                        y={tooltipY}
+                        width={totalWidth}
                       height={tooltipHeight}
                       rx="6"
                       fill="#0f172a"
@@ -738,6 +743,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                         className="transition-colors"
                       />
                     )}
+                    </g>
                   </g>
                 );
               })()}
