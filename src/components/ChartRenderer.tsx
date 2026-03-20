@@ -258,10 +258,12 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     
     if (dx < 40 && dy < 40 && dt < 1000) {
       if (targetWasTextRef.current) {
-        handleTooltipClick();
+        // Modal opening is deferred to the onClick handler of the tooltip <g> element.
+        // Opening it here on pointerUp causes synthetic ghost clicks (which fire right after this)
+        // to pass through and instantly close the newly mounted modal backdrop.
       }
     }
-  }, [handleTooltipClick]);
+  }, []); // handleTooltipClick dependency removed as it's no longer called here
 
   // --- Gradients and visual computations ---
   const stops = useMemo(() => {
@@ -737,7 +739,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       onPointerDown={() => { targetWasTextRef.current = true; }}
                       onClick={(e) => {
                          e.stopPropagation();
-                         handleTooltipClick();
+                         const dx = Math.abs(e.clientX - scrubStartPosRef.current.x);
+                         const dy = Math.abs(e.clientY - scrubStartPosRef.current.y);
+                         const dt = Date.now() - scrubStartPosRef.current.time;
+                         if (dx < 40 && dy < 40 && dt < 1000) {
+                           if (targetWasTextRef.current) {
+                             handleTooltipClick();
+                           }
+                         }
                       }}
                     >
                       <rect
