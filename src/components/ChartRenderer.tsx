@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
 import { SNAP_THRESHOLD, WEEKLY_TUNNEL_WIDTH, DAILY_TUNNEL_WIDTH } from '../lib/constants';
-import { interpolateColor, formatDate } from '../lib/utils';
+import { interpolateColor, formatDate, mixWithGray } from '../lib/utils';
 
 interface ChartRendererProps {
   data: ChartPoint[]; // ignored now, we use allData
@@ -185,10 +185,21 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
         onSelectEntry(entry);
       }
     } else {
+      let weeklyComment = "";
+      if (point.entries) {
+        const comments = point.entries
+          .filter(e => e.comment)
+          .map(e => `${formatDate(e.date)}: ${e.comment}`);
+        if (comments.length > 0) {
+           weeklyComment = comments.join('\n');
+        }
+      }
+
       const entry: WeightEntry = {
         id: `weekly-${point.label}`,
         weight: point.actual ?? point.trend ?? 0,
         date: point.weekLabel || point.label,
+        comment: weeklyComment || undefined,
         createdAt: null,
       };
       onSelectEntry(entry);
@@ -203,7 +214,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     if (visibleCount < 2 || !settings) return [];
 
     const stopList: React.ReactElement[] = [];
-    const windowSize = mode === 'daily' ? 4 : 1; // Look up up to 2 or 4 points backwards and forwards
+    const windowSize = mode === 'daily' ? 4 : 1; // Look up up to 1 or 4 points backwards and forwards
     let lastColor = '';
 
     for (let i = 0; i < visibleCount; i++) {
@@ -237,7 +248,15 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
         }
 
         const diff = Math.abs(averageSlope - settings.weeklyRate);
-        const color = interpolateColor(diff);
+        let color = interpolateColor(diff);
+
+        // Fade tail to gray if not enough points right of current point
+        const pointsToRight = allData.length - 1 - absIndex;
+        if (pointsToRight < windowSize) {
+           const grayFactor = 1.0 - (pointsToRight / windowSize);
+           color = mixWithGray(color, grayFactor);
+        }
+
         lastColor = color;
 
         // Calculate offset percentage relative to available width
@@ -329,17 +348,16 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       const p0 = allData[0];
       const p1 = allData[1];
       if (p0 && p0.trend !== null && p1 && p1.trend !== null) {
-         const x0 = getX(0), y0 = getY(p0.trend);
-         const x1 = getX(1), y1 = getY(p1.trend);
-         if (x1 !== x0) {
-             const m = (y1 - y0) / (x1 - x0);
-             const yEdge = y0 - m * (x0 - padding.left);
-             trendPath += `M ${padding.left},${yEdge} `;
-         }
+        const x0 = getX(0), y0 = getY(p0.trend);
+        const x1 = getX(1), y1 = getY(p1.trend);
+        if (x1 !== x0) {
+          const m = (y1 - y0) / (x1 - x0);
+          const yEdge = y0 - m * (x0 - padding.left);
+          trendPath += `M ${padding.left},${yEdge} `;
+        }
       }
     }
-
-    for (let i = startIdx; i < endIdx; i++) {
+       for (let i = startIdx; i < endIdx; i++) {
       const d = allData[i];
       if (d.trend === null) continue;
       const x = getX(i);
@@ -347,23 +365,9 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       if (trendPath === '') trendPath += `M ${x},${y} `;
       else trendPath += `L ${x},${y} `;
     }
-
-    if (endIdx === allData.length) {
-      const pLast = allData[N - 1];
-      const pPrev = allData[N - 2];
-      if (pLast && pLast.trend !== null && pPrev && pPrev.trend !== null) {
-         const xLast = getX(N - 1), yLast = getY(pLast.trend);
-         const xPrev = getX(N - 2), yPrev = getY(pPrev.trend);
-         if (xLast !== xPrev) {
-             const m = (yLast - yPrev) / (xLast - xPrev);
-             const yEdge = yLast + m * ((renderWidth - padding.right) - xLast);
-             trendPath += `L ${renderWidth - padding.right},${yEdge} `;
-         }
-      }
-    }
   }
 
-  let projectionPath = '';
+  let projectionPath = ''; '';
   let tunnelPath = '';
 
   if (projection && visibleData.length > 0) {
@@ -515,6 +519,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
             const py = getY(d.actual);
             const isActive = activeDateStr === d.label;
 
+            const hasComment = mode === 'daily'
+              ? !!d.originalEntry?.comment
+              : !!d.entries?.some(e => e.comment);
+
             return (
               <circle
                 key={idx}
@@ -523,6 +531,8 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 r={isActive ? 5 : (expanded ? 3.5 : 2)}
                 fill={isActive ? "#ffffff" : "#10b981"}
                 opacity={isActive ? "1" : (expanded ? "0.9" : "0.6")}
+                stroke={hasComment ? "#3b82f6" : undefined}
+                strokeWidth={hasComment ? (expanded ? 2 : 1.5) : undefined}
               />
             );
           })}

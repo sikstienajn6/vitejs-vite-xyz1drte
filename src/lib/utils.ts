@@ -75,3 +75,19 @@ export const interpolateColor = (diff: number) => {
 
   return `rgb(${r}, ${g}, ${b})`;
 };
+
+export const mixWithGray = (rgbStr: string, factor: number) => {
+  const match = rgbStr.match(/\d+/g);
+  if (!match || match.length < 3) return rgbStr;
+  const r = parseInt(match[0], 10);
+  const g = parseInt(match[1], 10);
+  const b = parseInt(match[2], 10);
+
+  const gr = 148, gg = 163, gb = 184;
+
+  const nr = Math.round(r + (gr - r) * Math.max(0, Math.min(1, factor)));
+  const ng = Math.round(g + (gg - g) * Math.max(0, Math.min(1, factor)));
+  const nb = Math.round(b + (gb - b) * Math.max(0, Math.min(1, factor)));
+
+  return `rgb(${nr}, ${ng}, ${nb})`;
+};
