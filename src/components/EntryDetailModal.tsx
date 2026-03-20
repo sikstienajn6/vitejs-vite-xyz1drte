@@ -24,26 +24,24 @@ export function EntryDetailModal({ entry, onClose }: EntryDetailModalProps) {
           </div>
 
           {!entry.id.startsWith('weekly') && (
-            <>
-              <div className="grid grid-cols-1 gap-4">
-                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
-                  <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-                    <Clock size={14} className="text-blue-500" />
-                    {formatTime(entry.createdAt) || '--:--'}
-                  </p>
-                </div>
+            <div className="grid grid-cols-1 gap-4">
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800">
+                <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time Logged</p>
+                <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                  <Clock size={14} className="text-blue-500" />
+                  {formatTime(entry.createdAt) || '--:--'}
+                </p>
               </div>
+            </div>
+          )}
 
-              {entry.comment && (
-                <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
-                  <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
-                    <MessageSquare size={12} /> Comment
-                  </p>
-                  <p className="text-sm text-slate-200 italic">"{entry.comment}"</p>
-                </div>
-              )}
-            </>
+          {entry.comment && (
+            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
+                <MessageSquare size={12} /> {entry.id.startsWith('weekly') ? 'Comments this week' : 'Comment'}
+              </p>
+              <p className="text-sm text-slate-200 italic whitespace-pre-wrap">"{entry.comment}"</p>
+            </div>
           )}
 
           {entry.id.startsWith('weekly') && (

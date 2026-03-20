@@ -21,6 +21,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // Tooltip scrubbing refs
+  const isScrubbing = useRef(false);
+  const scrubStartDateRef = useRef<string | null>(null);
+
   // Touch tracking refs
   const lastTouchXRef = useRef(0);
   const lastTouchYRef = useRef(0);
@@ -167,6 +171,21 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     handleTap(e.clientX);
   }, [handleTap]);
 
+  const handleTooltipPointerDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    isScrubbing.current = true;
+    scrubStartDateRef.current = activeDateStr;
+  }, [activeDateStr]);
+
+  const handleTooltipPointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isScrubbing.current) return;
+    const label = findNearestDateStr(e.clientX);
+    if (label && label !== activeDateStr) {
+      setActiveDateStr(label);
+    }
+  }, [findNearestDateStr, activeDateStr]);
+
   const handleTooltipClick = useCallback(() => {
     if (!activeDateStr || !onSelectEntry) return;
     const point = allData.find(d => d.label === activeDateStr);
@@ -205,6 +224,15 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
       onSelectEntry(entry);
     }
   }, [activeDateStr, allData, mode, onSelectEntry]);
+
+  const handleTooltipPointerUp = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    isScrubbing.current = false;
+    if (scrubStartDateRef.current === activeDateStr) {
+      handleTooltipClick();
+    }
+  }, [activeDateStr, handleTooltipClick]);
 
   // --- Gradients and visual computations ---
   const stops = useMemo(() => {
@@ -511,6 +539,20 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
             />
           )}
 
+          {/* CROSSHAIR LINE (behind data points) */}
+          {isTooltipVisible && activePoint && (
+            <line
+              x1={activeXPos}
+              y1={padding.top}
+              x2={activeXPos}
+              y2={height - padding.bottom}
+              stroke="#94a3b8"
+              strokeWidth="1"
+              strokeDasharray="4 3"
+              opacity="0.7"
+            />
+          )}
+
           {/* DATA POINTS */}
           {visibleData.map((d) => {
             if (d.actual === null) return null;
@@ -532,7 +574,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                 fill={isActive ? "#ffffff" : "#10b981"}
                 opacity={isActive ? "1" : (expanded ? "0.9" : "0.6")}
                 stroke={hasComment ? "#3b82f6" : undefined}
-                strokeWidth={hasComment ? (expanded ? 2 : 1.5) : undefined}
+                strokeWidth={hasComment ? 1 : undefined}
               />
             );
           })}
@@ -593,17 +635,6 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
           {/* INTERACTIVE CROSSHAIR & TOOLTIP */}
           {isTooltipVisible && activePoint && (
             <g>
-              <line
-                x1={activeXPos}
-                y1={padding.top}
-                x2={activeXPos}
-                y2={height - padding.bottom}
-                stroke="#94a3b8"
-                strokeWidth="1"
-                strokeDasharray="4 3"
-                opacity="0.7"
-              />
-
               {/* Redesigned Button-like Tooltip */}
               {(() => {
                 const tooltipWeight = activePoint.actual !== null
@@ -636,10 +667,11 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
                 return (
                   <g
-                    style={{ cursor: onSelectEntry ? 'pointer' : 'default' }}
-                    onClick={(e) => { e.stopPropagation(); handleTooltipClick(); }}
-                    onTouchStart={(e) => e.stopPropagation()}
-                    onTouchEnd={(e) => { e.stopPropagation(); e.preventDefault(); handleTooltipClick(); }}
+                    style={{ cursor: onSelectEntry ? 'pointer' : 'default', touchAction: 'none' }}
+                    onPointerDown={handleTooltipPointerDown}
+                    onPointerMove={handleTooltipPointerMove}
+                    onPointerUp={handleTooltipPointerUp}
+                    onPointerCancel={handleTooltipPointerUp}
                     className="group"
                   >
                     <rect
