@@ -26,6 +26,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const scrubStartPosRef = useRef({ x: 0, y: 0, time: 0 });
   const scrubOffsetRef = useRef(0);
   const textGroupRef = useRef<SVGGElement>(null);
+  const targetWasTextRef = useRef(false);
 
   // Touch tracking refs
   const lastTouchXRef = useRef(0);
@@ -177,6 +178,11 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
 
   const handleTooltipPointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
+    
+    // setPointerCapture forces all subsequent pointer events to retarget to the capturing element.
+    // We must evaluate what they actually tapped right now before we capture it!
+    targetWasTextRef.current = textGroupRef.current?.contains(e.target as Node) ?? false;
+
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = true;
     scrubStartPosRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
@@ -191,7 +197,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     
     const dx = Math.abs(e.clientX - scrubStartPosRef.current.x);
     // Give a 10px deadzone to prevent jittering when actively touching the text box to click
-    if (dx < 10 && textGroupRef.current?.contains(e.target as Node)) return;
+    if (dx < 10 && targetWasTextRef.current) return;
 
     const virtualX = e.clientX + scrubOffsetRef.current;
     const label = findNearestDateStr(virtualX);
@@ -254,7 +260,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const dt = Date.now() - scrubStartPosRef.current.time;
     
     if (dx < 40 && dy < 40 && dt < 1000) {
-      if (textGroupRef.current?.contains(e.target as Node)) {
+      if (targetWasTextRef.current) {
         handleTooltipClick();
       }
     }
