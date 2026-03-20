@@ -732,7 +732,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       onPointerDown={() => { targetWasTextRef.current = false; }}
                     />
 
-                    <g ref={textGroupRef}>
+                    <g>
                       <rect
                         x={tooltipX}
                         y={tooltipY}
@@ -781,17 +781,22 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       />
                     )}
 
-                    {/* FULLY TRANSPARENT HITBOX FOR THE TOOLTIP TEXT */}
-                    {/* Drawn last to sit visually on top and reliably capture all events */}
+                    {/* FOOLPROOF HITBOX OVERLAY */}
+                    {/* opacity 1% to force strict hit-testing in WebKit, overriding transparent-fill skips */}
                     <rect
                       x={tooltipX}
                       y={tooltipY}
                       width={totalWidth}
                       height={tooltipHeight}
                       rx="6"
-                      fill="transparent"
+                      fill="rgba(0,0,0,0.01)"
+                      pointerEvents="all"
                       onPointerDown={() => { targetWasTextRef.current = true; }}
-                      style={{ touchAction: 'none' }}
+                      onClick={(e) => {
+                         e.stopPropagation();
+                         handleTooltipClick();
+                      }}
+                      style={{ touchAction: 'none', cursor: 'pointer' }}
                     />
                     </g>
                   </g>
