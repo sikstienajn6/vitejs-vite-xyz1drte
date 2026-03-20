@@ -713,6 +713,10 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                     onPointerMove={handleTooltipPointerMove}
                     onPointerUp={handleTooltipPointerUp}
                     onPointerCancel={handleTooltipPointerUp}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    onTouchEnd={(e) => e.stopPropagation()}
+                    onTouchMove={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
                     className="group"
                   >
                     {/* Invisible hit area covering the entire vertical dashed line height */}
