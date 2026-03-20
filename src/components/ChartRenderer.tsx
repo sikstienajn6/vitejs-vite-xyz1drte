@@ -518,7 +518,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
         width="100%" height="100%"
         /* Using viewBox ensures responsive scaling without glitching */
         viewBox={`0 0 ${renderWidth} ${height}`}
-        className="block touch-none"
+        className="block touch-pan-y"
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
