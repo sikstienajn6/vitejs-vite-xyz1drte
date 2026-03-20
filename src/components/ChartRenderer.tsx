@@ -179,10 +179,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
   const handleTooltipPointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation();
     
-    // setPointerCapture forces all subsequent pointer events to retarget to the capturing element.
-    // We must evaluate what they actually tapped right now before we capture it!
-    targetWasTextRef.current = textGroupRef.current?.contains(e.target as Node) ?? false;
-
+    // targetWasTextRef.current is set by the child hitbox inline handlers during the bubble phase!
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch(err) {}
     isScrubbing.current = true;
     scrubStartPosRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
@@ -732,6 +729,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                       height={height - padding.top - padding.bottom}
                       fill="transparent"
                       className="cursor-ew-resize"
+                      onPointerDown={() => { targetWasTextRef.current = false; }}
                     />
 
                     <g ref={textGroupRef}>
@@ -782,6 +780,19 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
                         className="transition-colors"
                       />
                     )}
+
+                    {/* FULLY TRANSPARENT HITBOX FOR THE TOOLTIP TEXT */}
+                    {/* Drawn last to sit visually on top and reliably capture all events */}
+                    <rect
+                      x={tooltipX}
+                      y={tooltipY}
+                      width={totalWidth}
+                      height={tooltipHeight}
+                      rx="6"
+                      fill="transparent"
+                      onPointerDown={() => { targetWasTextRef.current = true; }}
+                      style={{ touchAction: 'none' }}
+                    />
                     </g>
                   </g>
                 );
