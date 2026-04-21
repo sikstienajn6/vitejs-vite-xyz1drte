@@ -1,4 +1,4 @@
-import React from 'react';
+
 import { X, Calendar, Activity, Edit2 } from 'lucide-react';
 import type { GoalPeriod } from '../lib/types';
 import { formatDate } from '../lib/utils';

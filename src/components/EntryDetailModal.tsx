@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { X, Clock, MessageSquare, Edit2, Trash2 } from 'lucide-react';
 import type { WeightEntry } from '../lib/types';
 import { formatDate, formatTime } from '../lib/utils';

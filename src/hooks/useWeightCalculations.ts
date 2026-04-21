@@ -39,7 +39,6 @@ export function useWeightCalculations(
       groups[k].sort((a, b) => a.date.localeCompare(b.date));
     });
 
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
 
     let processedWeeks: WeeklySummary[] = Object.keys(groups).sort().map((weekKey) => {
       const entries = groups[weekKey];
