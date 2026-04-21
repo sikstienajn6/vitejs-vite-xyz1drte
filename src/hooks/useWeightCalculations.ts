@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { WeightEntry, SettingsData, WeeklySummary, ChartPoint, ProjectionData } from '../lib/types';
 import { EMA_ALPHA, TARGET_TOLERANCE } from '../lib/constants';
-import { getWeekKey, formatDate, getDaysArray, getMedian, getWeekMonday } from '../lib/utils';
+import { getWeekKey, formatDate, getDaysArray, getMedian, getWeekMonday, getActiveRateForDate } from '../lib/utils';
 
 export function useWeightCalculations(
   weights: WeightEntry[],
@@ -74,12 +74,21 @@ export function useWeightCalculations(
         processedWeeks[i].delta = 0;
       } else {
         const prevWeek = processedWeeks[i - 1];
-        processedWeeks[i].target = prevWeek.actual + rate;
+        const weekDate = processedWeeks[i].entries[0].date;
+        const activeRate = getActiveRateForDate(weekDate, settings.goalPeriods);
+        const appliedRate = activeRate !== null ? activeRate : 0;
+        processedWeeks[i].target = prevWeek.actual + appliedRate;
         processedWeeks[i].delta = processedWeeks[i].actual - prevWeek.actual;
         processedWeeks[i].hasPrev = true;
       }
 
-      processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+      const weekDate = processedWeeks[i].entries[0].date;
+      const activeRate = getActiveRateForDate(weekDate, settings.goalPeriods);
+      if (activeRate !== null) {
+        processedWeeks[i].inTunnel = Math.abs(processedWeeks[i].actual - processedWeeks[i].target) <= TARGET_TOLERANCE;
+      } else {
+        processedWeeks[i].inTunnel = true; // Neutral in gap
+      }
     }
 
     const currentRate = processedWeeks.length > 1 ? processedWeeks[processedWeeks.length - 1].delta : 0;
@@ -89,7 +98,11 @@ export function useWeightCalculations(
 
   const projectionData = useMemo<ProjectionData | null>(() => {
     if (!settings || weights.length === 0) return null;
-    const rate = parseFloat(settings.weeklyRate.toString()) || 0;
+    
+    // Find the currently open period rate, or fallback
+    const openPeriod = settings.goalPeriods?.find(p => p.endDate === null);
+    const rate = openPeriod ? openPeriod.weeklyRate : (parseFloat(settings.weeklyRate.toString()) || 0);
+
     const dailySlope = rate / 7;
 
     if (chartMode === 'daily') {

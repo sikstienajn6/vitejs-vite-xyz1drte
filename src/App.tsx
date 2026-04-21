@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { WeightEntry } from './lib/types';
+import type { WeightEntry, GoalPeriod } from './lib/types';
 
 import { useAuth } from './hooks/useAuth';
 import { useWeightData } from './hooks/useWeightData';
@@ -19,6 +19,7 @@ import { WeeklyHistory } from './components/WeeklyHistory';
 import { SettingsView } from './components/SettingsView';
 import { EntryDetailModal } from './components/EntryDetailModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { PeriodDetailModal } from './components/PeriodDetailModal';
 
 export default function App() {
   // --- Core State ---
@@ -31,6 +32,7 @@ export default function App() {
   const [showExplanation, setShowExplanation] = useState(false);
   const [expandedWeeks, setExpandedWeeks] = useState<string[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<WeightEntry | null>(null);
+  const [selectedPeriod, setSelectedPeriod] = useState<GoalPeriod | null>(null);
   const [adviceSkippedToday, setAdviceSkippedToday] = useState(false);
 
   // --- Derived Calculations ---
@@ -96,6 +98,7 @@ export default function App() {
                 handleDragStart={handleDragStart}
                 toggleExpand={toggleExpand}
                 onSelectEntry={setSelectedEntry}
+                onSelectPeriod={setSelectedPeriod}
               />
 
               <LogWeightForm
@@ -115,7 +118,6 @@ export default function App() {
                 onToggleWeek={toggleWeek}
                 onExportCsv={() => data.handleExportCsv(weeklyData, trendMap)}
                 onSelectEntry={setSelectedEntry}
-                onDeleteEntry={data.setDeleteConfirmationId}
               />
             </>
           )}
@@ -131,6 +133,8 @@ export default function App() {
               onRateChange={data.handleRateChange}
               onSave={data.handleSaveSettings}
               onBack={() => data.handleNavigation('dashboard')}
+              goalPeriods={data.settings?.goalPeriods}
+              onUpdateGoalPeriods={data.handleUpdateGoalPeriods}
             />
           )}
         </div>
@@ -138,7 +142,18 @@ export default function App() {
 
       {/* Modals */}
       {selectedEntry && (
-        <EntryDetailModal entry={selectedEntry} onClose={() => setSelectedEntry(null)} />
+        <EntryDetailModal entry={selectedEntry} onClose={() => setSelectedEntry(null)} onEdit={data.handleEditEntry} onDelete={data.setDeleteConfirmationId} />
+      )}
+
+      {selectedPeriod && (
+        <PeriodDetailModal 
+          period={selectedPeriod} 
+          onClose={() => setSelectedPeriod(null)} 
+          onEditInSettings={() => {
+            setSelectedPeriod(null);
+            data.handleNavigation('settings');
+          }} 
+        />
       )}
 
       {data.deleteConfirmationId && (

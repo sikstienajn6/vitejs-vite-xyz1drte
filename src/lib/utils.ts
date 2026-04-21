@@ -90,4 +90,22 @@ export const mixWithGray = (rgbStr: string, factor: number) => {
   const nb = Math.round(b + (gb - b) * Math.max(0, Math.min(1, factor)));
 
   return `rgb(${nr}, ${ng}, ${nb})`;
+}
+
+export const generateId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 };
+
+export const getActiveRateForDate = (dateStr: string, periods: import('./types').GoalPeriod[] | undefined): number | null => {
+  if (!periods || periods.length === 0) return null;
+  for (const p of periods) {
+    if (p.startDate <= dateStr && (p.endDate === null || p.endDate >= dateStr)) {
+      return p.weeklyRate;
+    }
+  }
+  return null;
+};
+;

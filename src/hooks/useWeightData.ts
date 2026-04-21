@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { WeightEntry, SettingsData } from '../lib/types';
-import { getWeekKey, getLastSundayWeekKey } from '../lib/utils';
+import { getWeekKey, getLastSundayWeekKey, generateId } from '../lib/utils';
 
 export function useWeightData(user: User | null) {
   const [weights, setWeights] = useState<WeightEntry[]>([]);
@@ -35,6 +35,30 @@ export function useWeightData(user: User | null) {
 
   // Modal state
   const [deleteConfirmationId, setDeleteConfirmationId] = useState<string | null>(null);
+
+  // Migration Effect
+  useEffect(() => {
+    if (user && settings && !settings.goalPeriods) {
+      const runMigration = async () => {
+        const earliestDate = weights.length > 0 ? weights[weights.length - 1].date : new Date().toISOString().split('T')[0];
+        const period: import('../lib/types').GoalPeriod = {
+          id: generateId(),
+          startDate: earliestDate,
+          endDate: null,
+          weeklyRate: settings.weeklyRate || 0
+        };
+        try {
+          await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
+            ...settings,
+            goalPeriods: [period]
+          });
+        } catch (err) {
+          console.error("Migration error:", err);
+        }
+      };
+      runMigration();
+    }
+  }, [user, settings, weights]);
 
   useEffect(() => {
     if (!user) {
@@ -151,10 +175,45 @@ export function useWeightData(user: User | null) {
 
       const cals = dailyCalories ? parseInt(dailyCalories) : 0;
 
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      let newGoalPeriods = settings?.goalPeriods ? [...settings.goalPeriods] : [];
+      let rateChanged = true;
+
+      // Close open period and create new one if needed
+      const openIdx = newGoalPeriods.findIndex(p => p.endDate === null);
+      if (openIdx !== -1) {
+        if (newGoalPeriods[openIdx].weeklyRate === rate) {
+          rateChanged = false;
+        } else {
+          if (newGoalPeriods[openIdx].startDate >= todayStr) {
+             // If the current period started today or in the future, just overwrite its rate to avoid overlap errors
+             newGoalPeriods[openIdx].weeklyRate = rate;
+             rateChanged = false;
+          } else {
+             newGoalPeriods[openIdx].endDate = yesterdayStr;
+          }
+        }
+      }
+
+      if (rateChanged) {
+        newGoalPeriods.push({
+           id: generateId(),
+           startDate: todayStr,
+           endDate: null,
+           weeklyRate: rate
+        });
+      }
+
       // @ts-ignore
       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
-        weeklyRate: rate,
+        weeklyRate: rate, // Legacy fallback
         dailyCalories: cals,
+        goalPeriods: newGoalPeriods,
         updatedAt: serverTimestamp()
       });
       setView('dashboard');
@@ -172,6 +231,29 @@ export function useWeightData(user: User | null) {
     } catch (err) {
       console.error("Delete error", err);
     }
+  };
+
+  const handleEditEntry = async (id: string, newWeight: number) => {
+    if (!user) return;
+    try {
+      const entryRef = doc(db, 'users', user.uid, 'weights', id);
+      await setDoc(entryRef, { weight: newWeight }, { merge: true });
+    } catch (err) {
+      console.error("Edit error", err);
+    }
+  };
+
+  const handleUpdateGoalPeriods = async (newPeriods: import('../lib/types').GoalPeriod[]) => {
+     if (!user || !settings) return;
+     try {
+       await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), {
+          ...settings,
+          goalPeriods: newPeriods,
+          updatedAt: serverTimestamp()
+       });
+     } catch (err) {
+       console.error("Error updating goal periods", err);
+     }
   };
 
   const handleExportCsv = (weeklyData: import('../lib/types').WeeklySummary[], trendMap: Map<string, number>) => {
@@ -249,5 +331,7 @@ export function useWeightData(user: User | null) {
     handleDeleteEntry,
     handleExportCsv,
     handleDismissAdvice,
+    handleEditEntry,
+    handleUpdateGoalPeriods,
   };
 }

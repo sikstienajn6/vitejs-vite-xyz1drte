@@ -1,4 +1,4 @@
-import { ChevronDown, Calendar, MessageSquare, Trash2 } from 'lucide-react';
+import { ChevronDown, Calendar, MessageSquare, Edit2 } from 'lucide-react';
 import type { WeeklySummary, WeightEntry, SettingsData } from '../lib/types';
 import { RATE_TOLERANCE_GREEN, RATE_TOLERANCE_ORANGE } from '../lib/constants';
 import { formatDate } from '../lib/utils';
@@ -11,7 +11,6 @@ interface WeeklyHistoryProps {
   onToggleWeek: (weekId: string) => void;
   onExportCsv: () => void;
   onSelectEntry: (entry: WeightEntry) => void;
-  onDeleteEntry: (id: string) => void;
 }
 
 function getRateAdherenceColor(rate: number, settings: SettingsData | null) {
@@ -23,7 +22,7 @@ function getRateAdherenceColor(rate: number, settings: SettingsData | null) {
   return 'text-rose-400';
 }
 
-export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWeek, onExportCsv, onSelectEntry, onDeleteEntry }: WeeklyHistoryProps) {
+export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWeek, onExportCsv, onSelectEntry }: WeeklyHistoryProps) {
   return (
     <section>
       <div className="flex items-center justify-between mb-3 px-1 gap-3">
@@ -112,10 +111,10 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
                                 <div className="flex items-center gap-3">
                                   <span className="font-medium text-slate-300">{entry.weight} kg</span>
                                   <button
-                                    onClick={(e) => { e.stopPropagation(); onDeleteEntry(entry.id); }}
-                                    className="text-slate-600 hover:text-red-400 p-1"
+                                    onClick={(e) => { e.stopPropagation(); onSelectEntry(entry); }}
+                                    className="text-slate-600 hover:text-blue-400 p-1"
                                   >
-                                    <Trash2 size={12} />
+                                    <Edit2 size={12} />
                                   </button>
                                 </div>
                               </div>

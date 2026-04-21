@@ -6,8 +6,16 @@ export interface WeightEntry {
   createdAt: any;
 }
 
+export interface GoalPeriod {
+  id: string;
+  startDate: string; // ISO yyyy-mm-dd
+  endDate: string | null; // ISO yyyy-mm-dd
+  weeklyRate: number;
+}
+
 export interface SettingsData {
   weeklyRate: number;
+  goalPeriods?: GoalPeriod[];
   dailyCalories?: number;
   updatedAt: any;
 }

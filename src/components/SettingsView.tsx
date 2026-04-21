@@ -1,5 +1,7 @@
 import React from 'react';
 import { ChevronRight } from 'lucide-react';
+import { GoalHistoryEditor } from './GoalHistoryEditor';
+import type { GoalPeriod } from '../lib/types';
 
 interface SettingsViewProps {
   goalType: 'gain' | 'lose';
@@ -11,9 +13,11 @@ interface SettingsViewProps {
   onRateChange: (val: string, type: 'weekly' | 'monthly') => void;
   onSave: (e: React.FormEvent) => void;
   onBack: () => void;
+  goalPeriods?: GoalPeriod[];
+  onUpdateGoalPeriods: (periods: GoalPeriod[]) => void;
 }
 
-export function SettingsView({ goalType, setGoalType, weeklyRate, monthlyRate, dailyCalories, setDailyCalories, onRateChange, onSave, onBack }: SettingsViewProps) {
+export function SettingsView({ goalType, setGoalType, weeklyRate, monthlyRate, dailyCalories, setDailyCalories, onRateChange, onSave, onBack, goalPeriods, onUpdateGoalPeriods }: SettingsViewProps) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-2 mb-4 shrink-0">
@@ -82,6 +86,10 @@ export function SettingsView({ goalType, setGoalType, weeklyRate, monthlyRate, d
             Save Plan ({goalType === 'lose' ? '-' : '+'}{weeklyRate || 0}kg/wk)
           </button>
         </div>
+
+        {goalPeriods && (
+          <GoalHistoryEditor periods={goalPeriods} onUpdate={onUpdateGoalPeriods} />
+        )}
       </form>
     </div>
   );

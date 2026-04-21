@@ -20,6 +20,7 @@ interface ChartSectionProps {
   handleDragStart: (e: React.MouseEvent | React.TouchEvent) => void;
   toggleExpand: () => void;
   onSelectEntry: (entry: WeightEntry) => void;
+  onSelectPeriod?: (period: import('../lib/types').GoalPeriod) => void;
 }
 
 export function ChartSection({
@@ -39,6 +40,7 @@ export function ChartSection({
   handleDragStart,
   toggleExpand,
   onSelectEntry,
+  onSelectPeriod,
 }: ChartSectionProps) {
   return (
     <section className="flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-sm overflow-hidden" ref={containerRef}>
@@ -81,6 +83,7 @@ export function ChartSection({
         settings={settings}
         projection={projectionData}
         onSelectEntry={onSelectEntry}
+        onSelectPeriod={onSelectPeriod}
       />
 
       <div className="p-3 pt-2 space-y-2 select-none shrink-0 border-t border-slate-800/50">

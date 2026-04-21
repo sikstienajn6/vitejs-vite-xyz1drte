@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
 import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
 import { SNAP_THRESHOLD, WEEKLY_TUNNEL_WIDTH, DAILY_TUNNEL_WIDTH } from '../lib/constants';
-import { interpolateColor, formatDate, mixWithGray } from '../lib/utils';
+import { interpolateColor, formatDate, mixWithGray, getActiveRateForDate } from '../lib/utils';
 
 interface ChartRendererProps {
   data: ChartPoint[]; // ignored now, we use allData
@@ -13,9 +13,10 @@ interface ChartRendererProps {
   settings: SettingsData | null;
   projection: ProjectionData | null;
   onSelectEntry?: (entry: WeightEntry) => void;
+  onSelectPeriod?: (period: import('../lib/types').GoalPeriod) => void;
 }
 
-export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projection, onSelectEntry }: ChartRendererProps) {
+export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projection, onSelectEntry, onSelectPeriod }: ChartRendererProps) {
   const [activeDateStr, setActiveDateStr] = useState<string | null>(null);
   const [viewOffset, setViewOffset] = useState<number>(0);  // float offset from the right edge
 
@@ -306,8 +307,14 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
           averageSlope *= 7;
         }
 
-        const diff = Math.abs(averageSlope - settings.weeklyRate);
-        let color = interpolateColor(diff);
+        const pointDateStr = allData[absIndex].dateObj.toISOString().split('T')[0];
+        const activeRate = getActiveRateForDate(pointDateStr, settings.goalPeriods);
+
+        let color = '#94a3b8'; // Default neutral
+        if (activeRate !== null) {
+           const diff = Math.abs(averageSlope - activeRate);
+           color = interpolateColor(diff);
+        }
 
         // Fade tail to gray if not enough points right of current point
         const pointsToRight = allData.length - 1 - absIndex;
@@ -552,6 +559,51 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
         <line x1={padding.left} y1={height - padding.bottom} x2={renderWidth - padding.right} y2={height - padding.bottom} stroke="#334155" strokeWidth="1" />
 
         <g clipPath="url(#chartClip)">
+          {/* VERTICAL PERIOD MARKERS */}
+          {settings?.goalPeriods?.map((period, idx) => {
+            if (idx === 0) return null;
+            
+            const pDate = new Date(period.startDate);
+            const firstDate = allData[0].dateObj.getTime();
+            const lastDate = allData[allData.length - 1].dateObj.getTime();
+            let exactIdx = -1;
+            
+            if (pDate.getTime() >= firstDate && pDate.getTime() <= lastDate) {
+               for (let i = 0; i < allData.length - 1; i++) {
+                  const d1 = allData[i].dateObj.getTime();
+                  const d2 = allData[i+1].dateObj.getTime();
+                  const t = pDate.getTime();
+                  if (t === d1) { exactIdx = i; break; }
+                  if (t > d1 && t < d2) {
+                     exactIdx = i + (t - d1) / (d2 - d1);
+                     break;
+                  }
+               }
+               if (exactIdx === -1 && pDate.getTime() === lastDate) exactIdx = allData.length - 1;
+            }
+            
+            if (exactIdx >= 0) {
+               const px = getX(exactIdx);
+               if (px >= padding.left && px <= renderWidth - padding.right) {
+                  return (
+                     <g key={`marker-${period.id}`}>
+                       <line x1={px} y1={padding.top} x2={px} y2={height - padding.bottom} stroke="#3b82f6" strokeDasharray="4 4" opacity="0.6" strokeWidth="1.5" />
+                       <rect 
+                          x={px - 20} y={padding.top} width={40} height={height - padding.bottom - padding.top} 
+                          fill="transparent" 
+                          style={{ cursor: onSelectPeriod ? 'pointer' : 'default' }}
+                          onClick={(e) => {
+                             e.stopPropagation();
+                             if (onSelectPeriod) onSelectPeriod(period);
+                          }}
+                       />
+                     </g>
+                  );
+               }
+            }
+            return null;
+          })}
+
           {/* TUNNEL */}
           {tunnelPath && <path d={tunnelPath} fill="#10b981" opacity="0.1" stroke="none" />}
 
