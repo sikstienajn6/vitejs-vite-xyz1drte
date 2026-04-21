@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback, useEffect } from 'react';
-import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
+import type { ChartPoint, SettingsData, ProjectionSegment, WeightEntry } from '../lib/types';
 import { SNAP_THRESHOLD, WEEKLY_TUNNEL_WIDTH, DAILY_TUNNEL_WIDTH } from '../lib/constants';
 import { interpolateColor, formatDate, mixWithGray, getActiveRateForDate } from '../lib/utils';
 
@@ -11,12 +11,12 @@ interface ChartRendererProps {
   height: number;
   width: number;
   settings: SettingsData | null;
-  projection: ProjectionData | null;
+  projectionSegments: ProjectionSegment[];
   onSelectEntry?: (entry: WeightEntry) => void;
   onSelectPeriod?: (period: import('../lib/types').GoalPeriod) => void;
 }
 
-export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projection, onSelectEntry, onSelectPeriod }: ChartRendererProps) {
+export function ChartRenderer({ allData, mode, filterRange, height, width, settings, projectionSegments, onSelectEntry, onSelectPeriod }: ChartRendererProps) {
   const [activeDateStr, setActiveDateStr] = useState<string | null>(null);
   const [viewOffset, setViewOffset] = useState<number>(0);  // float offset from the right edge
 
@@ -351,10 +351,12 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     if (d.actual !== null) vals.push(d.actual);
     if (d.trend !== null) vals.push(d.trend);
 
-    if (projection && settings) {
+    if (projectionSegments && projectionSegments.length > 0 && settings) {
       const msPerDay = 86400000;
-      const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+      const ms = d.dateObj.getTime();
+      const seg = projectionSegments.find(s => ms >= s.startDateMs && ms <= s.endDateMs) || projectionSegments[0];
+      const diffDays = (ms - seg.anchorDateMs) / msPerDay;
+      const idealY = seg.anchorVal + (diffDays * seg.dailySlope);
       vals.push(idealY + tunnelTolerance);
       vals.push(idealY - tunnelTolerance);
     }
@@ -433,79 +435,88 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     }
   }
 
-  let projectionPath = ''; '';
+  let projectionPath = '';
   let tunnelPath = '';
 
-  if (projection && visibleData.length > 0) {
+  if (projectionSegments && projectionSegments.length > 0 && visibleData.length > 0) {
     const msPerDay = 86400000;
-    const upperPoints: [number, number][] = [];
-    const lowerPoints: [number, number][] = [];
+    
+    const getXForMs = (ms: number) => {
+      if (allData.length === 0) return padding.left;
+      const firstD = allData[0].dateObj.getTime();
+      const lastD = allData[allData.length - 1].dateObj.getTime();
+      
+      if (ms <= firstD) {
+          const avgDt = allData.length > 1 ? (lastD - firstD) / (allData.length - 1) : msPerDay;
+          return getX(0) + ((ms - firstD)/avgDt)*pxPerPoint; 
+      }
+      if (ms >= lastD) {
+          const avgDt = allData.length > 1 ? (lastD - firstD) / (allData.length - 1) : msPerDay;
+          return getX(allData.length - 1) + ((ms - lastD)/avgDt)*pxPerPoint;
+      }
+      
+      for (let i = 0; i < allData.length - 1; i++) {
+         const t1 = allData[i].dateObj.getTime();
+         const t2 = allData[i+1].dateObj.getTime();
+         if (ms === t1) return getX(i);
+         if (ms > t1 && ms < t2) {
+            return getX(i + (ms - t1) / (t2 - t1));
+         }
+      }
+      return getX(allData.length - 1);
+    }
 
-    const extendTunnel = (px: number) => {
-      const virtualI = currLeft + (px - padding.left - 10) / pxPerPoint;
-      let dateMs: number;
+    const renderVisLeftDateMs = visibleData[0].dateObj.getTime();
+    const renderVisRightDateMs = visibleData[visibleData.length - 1].dateObj.getTime();
+    const leftEdgeDateMs = renderVisLeftDateMs - Math.max(7*msPerDay, Math.abs(renderVisRightDateMs - renderVisLeftDateMs) / 2);
+    const rightEdgeDateMs = renderVisRightDateMs + Math.max(7*msPerDay, Math.abs(renderVisRightDateMs - renderVisLeftDateMs) / 2);
 
-      if (N <= 1) {
-        dateMs = N === 1 ? allData[0].dateObj.getTime() : new Date().getTime();
-      } else if (virtualI < 0) {
-        const dt = allData[1].dateObj.getTime() - allData[0].dateObj.getTime();
-        dateMs = allData[0].dateObj.getTime() + virtualI * dt;
-      } else if (virtualI > N - 1) {
-        const dt = allData[N - 1].dateObj.getTime() - allData[N - 2].dateObj.getTime();
-        dateMs = allData[N - 1].dateObj.getTime() + (virtualI - (N - 1)) * dt;
-      } else {
-        const i0 = Math.floor(virtualI);
-        const i1 = Math.ceil(virtualI);
-        if (i0 === i1) {
-          dateMs = allData[i0].dateObj.getTime();
-        } else {
-          const t = virtualI - i0;
-          dateMs = allData[i0].dateObj.getTime() * (1 - t) + allData[i1].dateObj.getTime() * t;
-        }
+    projectionSegments.forEach(seg => {
+      const drawStartMs = Math.max(seg.startDateMs, leftEdgeDateMs);
+      const drawEndMs = Math.min(seg.endDateMs, rightEdgeDateMs);
+      
+      if (drawStartMs >= drawEndMs) return;
+
+      const upperPoints: [number, number][] = [];
+      const lowerPoints: [number, number][] = [];
+      let segmentProjPath = '';
+
+      const addPointToSegment = (ms: number, isStart: boolean = false) => {
+         const x = getXForMs(ms);
+         const diffDays = (ms - seg.anchorDateMs) / msPerDay;
+         const idealY = seg.anchorVal + (diffDays * seg.dailySlope);
+         const y = getY(idealY);
+         
+         if (isStart) segmentProjPath += `M ${x},${y} `;
+         else segmentProjPath += `L ${x},${y} `;
+         
+         const yUpp = clampToAxis(getY(idealY + tunnelTolerance));
+         const yLow = clampToAxis(getY(idealY - tunnelTolerance));
+         upperPoints.push([x, yUpp]);
+         lowerPoints.push([x, yLow]);
+      };
+
+      addPointToSegment(drawStartMs, true);
+
+      for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
+         const ms = allData[i].dateObj.getTime();
+         if (ms > drawStartMs && ms < drawEndMs) {
+            addPointToSegment(ms);
+         }
       }
 
-      const diffDays = (dateMs - projection.anchorDate.getTime()) / msPerDay;
-      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
+      addPointToSegment(drawEndMs);
 
-      return {
-        x: px,
-        y: getY(idealY),
-        yUpper: clampToAxis(getY(idealY + tunnelTolerance)),
-        yLower: clampToAxis(getY(idealY - tunnelTolerance))
-      };
-    };
+      projectionPath += segmentProjPath;
 
-    const leftEdge = extendTunnel(padding.left);
-    projectionPath += `M ${leftEdge.x},${leftEdge.y} `;
-    upperPoints.push([leftEdge.x, leftEdge.yUpper]);
-    lowerPoints.push([leftEdge.x, leftEdge.yLower]);
-
-    for (let i = visibleDataIndices.start; i < visibleDataIndices.end; i++) {
-      const d = allData[i];
-      const diffDays = (d.dateObj.getTime() - projection.anchorDate.getTime()) / msPerDay;
-      const idealY = projection.anchorVal + (diffDays * projection.dailySlope);
-      const x = getX(i);
-      const y = getY(idealY);
-
-      projectionPath += `L ${x},${y} `;
-
-      const yUpper = clampToAxis(getY(idealY + tunnelTolerance));
-      const yLower = clampToAxis(getY(idealY - tunnelTolerance));
-      upperPoints.push([x, yUpper]);
-      lowerPoints.push([x, yLower]);
-    }
-
-    const rightEdge = extendTunnel(renderWidth - padding.right);
-    projectionPath += `L ${rightEdge.x},${rightEdge.y} `;
-    upperPoints.push([rightEdge.x, rightEdge.yUpper]);
-    lowerPoints.push([rightEdge.x, rightEdge.yLower]);
-
-    if (upperPoints.length > 0) {
-      tunnelPath = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
-      for (let k = 1; k < upperPoints.length; k++) tunnelPath += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
-      for (let k = lowerPoints.length - 1; k >= 0; k--) tunnelPath += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
-      tunnelPath += ' Z';
-    }
+      if (upperPoints.length > 0) {
+         let subTunnel = `M ${upperPoints[0][0]},${upperPoints[0][1]}`;
+         for (let k = 1; k < upperPoints.length; k++) subTunnel += ` L ${upperPoints[k][0]},${upperPoints[k][1]}`;
+         for (let k = lowerPoints.length - 1; k >= 0; k--) subTunnel += ` L ${lowerPoints[k][0]},${lowerPoints[k][1]}`;
+         subTunnel += ' Z ';
+         tunnelPath += subTunnel;
+      }
+    });
   }
 
   const activeIndex = activeDateStr ? allData.findIndex(d => d.label === activeDateStr) : -1;

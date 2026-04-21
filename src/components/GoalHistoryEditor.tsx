@@ -161,7 +161,7 @@ export function GoalHistoryEditor({ periods, onUpdate }: GoalHistoryEditorProps)
                 </div>
                 <div>
                   <label className="text-[10px] uppercase font-bold text-slate-500">Weekly Rate (kg/wk)</label>
-                  <input type="number" step="0.1" value={editRate} onChange={e => setEditRate(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1.5 text-sm" />
+                  <input type="text" inputMode="decimal" value={editRate} onChange={e => setEditRate(e.target.value)} className="w-full bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1.5 text-sm" />
                 </div>
                 {errorMsg && <p className="text-red-400 text-xs font-bold">{errorMsg}</p>}
                 <div className="flex gap-2 pt-2">

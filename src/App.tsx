@@ -36,7 +36,7 @@ export default function App() {
   const [adviceSkippedToday, setAdviceSkippedToday] = useState(false);
 
   // --- Derived Calculations ---
-  const { weeklyData, trendMap, currentTrendRate, projectionData, allChartData, finalChartData } =
+  const { weeklyData, trendMap, currentTrendRate, projectionSegments, allChartData, finalChartData } =
     useWeightCalculations(data.weights, data.settings, chartMode, filterRange);
 
   // --- Chart Drag ---
@@ -92,7 +92,7 @@ export default function App() {
                 containerWidth={containerWidth}
                 containerRef={containerRef}
                 settings={data.settings}
-                projectionData={projectionData}
+                projectionSegments={projectionSegments}
                 showExplanation={showExplanation}
                 setShowExplanation={setShowExplanation}
                 handleDragStart={handleDragStart}

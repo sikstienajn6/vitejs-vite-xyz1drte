@@ -44,10 +44,11 @@ export interface ChartPoint {
   entries?: WeightEntry[];
 }
 
-export interface ProjectionData {
-  anchorDate: Date;
+export interface ProjectionSegment {
+  periodId: string;
+  startDateMs: number;
+  endDateMs: number;
+  anchorDateMs: number;
   anchorVal: number;
   dailySlope: number;
-  weeklySlope: number;
-  anchorIndex?: number;
 }

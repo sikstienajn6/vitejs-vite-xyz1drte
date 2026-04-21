@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { WeightEntry, SettingsData, WeeklySummary, ChartPoint, ProjectionData } from '../lib/types';
+import type { WeightEntry, SettingsData, WeeklySummary, ChartPoint, ProjectionSegment } from '../lib/types';
 import { EMA_ALPHA, TARGET_TOLERANCE } from '../lib/constants';
 import { getWeekKey, formatDate, getDaysArray, getMedian, getWeekMonday, getActiveRateForDate } from '../lib/utils';
 
@@ -95,39 +95,63 @@ export function useWeightCalculations(
     return { weeklyData: processedWeeks, trendMap: tMap, currentTrendRate: currentRate };
   }, [weights, settings]);
 
-  const projectionData = useMemo<ProjectionData | null>(() => {
-    if (!settings || weights.length === 0) return null;
+  const projectionSegments = useMemo<ProjectionSegment[]>(() => {
+    if (!settings?.goalPeriods || weights.length === 0) return [];
     
-    // Find the currently open period rate, or fallback
-    const openPeriod = settings.goalPeriods?.find(p => p.endDate === null);
-    const rate = openPeriod ? openPeriod.weeklyRate : (parseFloat(settings.weeklyRate.toString()) || 0);
+    const sortedDates = Array.from(trendMap.keys()).map(k => String(k)).sort();
+    const getTrendAt = (dateStr: string) => {
+       const exact = trendMap.get(dateStr);
+       if (exact !== undefined) return exact;
+       let closest = weights[0]?.weight ?? 0;
+       for (const d of sortedDates) {
+          if (d <= dateStr) {
+             closest = trendMap.get(d) ?? closest;
+          } else {
+             break;
+          }
+       }
+       return closest;
+    };
 
-    const dailySlope = rate / 7;
+    return settings.goalPeriods.map(p => {
+       const isClosed = p.endDate !== null;
+       const startDateMs = new Date(p.startDate).getTime();
+       const endDateMs = isClosed ? new Date(p.endDate!).getTime() : Number.MAX_SAFE_INTEGER;
+       const dailySlope = p.weeklyRate / 7;
+       
+       let anchorDateMs: number;
+       let anchorVal: number;
 
-    if (chartMode === 'daily') {
-      const anchorIndex = weights.length > 1 ? 1 : 0;
-      const anchorEntry = weights[anchorIndex];
-      const anchorVal = trendMap.get(anchorEntry.date) ?? anchorEntry.weight;
+       if (isClosed) {
+          anchorDateMs = endDateMs;
+          anchorVal = getTrendAt(p.endDate!);
+       } else {
+          if (chartMode === 'daily') {
+             const anchorEntry = weights.length > 1 ? weights[1] : weights[0];
+             anchorDateMs = new Date(anchorEntry.date).getTime();
+             anchorVal = getTrendAt(anchorEntry.date);
+          } else {
+             const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : (weeklyData.length > 0 ? weeklyData.length - 1 : 0);
+             if (weeklyData.length > 0) {
+                 const anchorWeek = weeklyData[anchorIndex];
+                 anchorDateMs = getWeekMonday(anchorWeek.entries[0].date).getTime();
+                 anchorVal = anchorWeek.actual;
+             } else {
+                 anchorDateMs = new Date(weights[0].date).getTime();
+                 anchorVal = getTrendAt(weights[0].date);
+             }
+          }
+       }
 
-      return {
-        anchorDate: new Date(anchorEntry.date),
-        anchorVal: anchorVal,
-        dailySlope: dailySlope,
-        weeklySlope: rate
-      };
-    } else {
-      const anchorIndex = weeklyData.length > 1 ? weeklyData.length - 2 : weeklyData.length - 1;
-      const anchorWeek = weeklyData[anchorIndex];
-      const anchorDate = getWeekMonday(anchorWeek.entries[0].date);
-
-      return {
-        anchorDate: anchorDate,
-        anchorVal: anchorWeek.actual,
-        dailySlope: dailySlope,
-        weeklySlope: rate,
-        anchorIndex: anchorIndex
-      };
-    }
+       return {
+          periodId: p.id,
+          startDateMs,
+          endDateMs,
+          anchorDateMs,
+          anchorVal,
+          dailySlope
+       };
+    });
   }, [weights, weeklyData, chartMode, settings, trendMap]);
 
   // All chart data without date filtering — used for panning
@@ -204,5 +228,5 @@ export function useWeightCalculations(
     return allChartData.filter(p => p.dateObj >= startDate);
   }, [allChartData, weights, filterRange]);
 
-  return { weeklyData, trendMap, currentTrendRate, projectionData, allChartData, finalChartData };
+  return { weeklyData, trendMap, currentTrendRate, projectionSegments, allChartData, finalChartData };
 }

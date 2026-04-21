@@ -1,6 +1,6 @@
 import React from 'react';
 import { Info } from 'lucide-react';
-import type { ChartPoint, SettingsData, ProjectionData, WeightEntry } from '../lib/types';
+import type { ChartPoint, SettingsData, ProjectionSegment, WeightEntry } from '../lib/types';
 import { ChartRenderer } from './ChartRenderer';
 
 interface ChartSectionProps {
@@ -14,7 +14,7 @@ interface ChartSectionProps {
   containerWidth: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
   settings: SettingsData | null;
-  projectionData: ProjectionData | null;
+  projectionSegments: ProjectionSegment[];
   showExplanation: boolean;
   setShowExplanation: (show: boolean) => void;
   handleDragStart: (e: React.MouseEvent | React.TouchEvent) => void;
@@ -34,7 +34,7 @@ export function ChartSection({
   containerWidth,
   containerRef,
   settings,
-  projectionData,
+  projectionSegments,
   showExplanation,
   setShowExplanation,
   handleDragStart,
@@ -81,7 +81,7 @@ export function ChartSection({
         height={chartHeight}
         width={containerWidth}
         settings={settings}
-        projection={projectionData}
+        projectionSegments={projectionSegments}
         onSelectEntry={onSelectEntry}
         onSelectPeriod={onSelectPeriod}
       />
