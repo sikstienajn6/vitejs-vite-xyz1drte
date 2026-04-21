@@ -1,7 +1,7 @@
 import { ChevronDown, Calendar, MessageSquare, Edit2 } from 'lucide-react';
 import type { WeeklySummary, WeightEntry, SettingsData } from '../lib/types';
 import { RATE_TOLERANCE_GREEN, RATE_TOLERANCE_ORANGE } from '../lib/constants';
-import { formatDate } from '../lib/utils';
+import { formatDate, getActiveRateForDate } from '../lib/utils';
 import { getWeekTrendStatus } from '../hooks/useAdvice';
 
 interface WeeklyHistoryProps {
@@ -13,9 +13,9 @@ interface WeeklyHistoryProps {
   onSelectEntry: (entry: WeightEntry) => void;
 }
 
-function getRateAdherenceColor(rate: number, settings: SettingsData | null) {
+function getRateAdherenceColor(rate: number, settings: SettingsData | null, activeRate?: number | null) {
   if (!settings) return 'text-slate-500';
-  const targetRate = settings.weeklyRate;
+  const targetRate = activeRate !== undefined && activeRate !== null ? activeRate : settings.weeklyRate;
   const deviation = Math.abs(rate - targetRate);
   if (deviation <= RATE_TOLERANCE_GREEN) return 'text-emerald-400';
   if (deviation <= RATE_TOLERANCE_ORANGE) return 'text-amber-400';
@@ -45,7 +45,9 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
         <div className="divide-y divide-slate-800">
           {weeklyData.slice().reverse().map((item) => {
             const isExpanded = expandedWeeks.includes(item.weekId);
-            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta, settings);
+            const weekDate = item.entries.length > 0 ? item.entries[0].date : '';
+            const activeRate = weekDate ? getActiveRateForDate(weekDate, settings?.goalPeriods) : null;
+            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta, settings, activeRate);
             return (
               <div key={item.weekId} className="transition-colors">
                 <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => onToggleWeek(item.weekId)}>
@@ -77,7 +79,7 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
                       const now = new Date();
                       const isWeekComplete = now >= nextMonday;
 
-                      const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
+                      const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings, activeRate) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
                       return (
                         <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
                           {isWeekComplete && (

@@ -7,9 +7,9 @@ interface AdviceResult {
   text: string;
 }
 
-export function getWeekTrendStatus(delta: number, settings: SettingsData | null) {
+export function getWeekTrendStatus(delta: number, settings: SettingsData | null, activeRate?: number | null) {
   if (!settings) return { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500' };
-  const targetRate = settings.weeklyRate;
+  const targetRate = activeRate !== undefined && activeRate !== null ? activeRate : settings.weeklyRate;
 
   const diffRate = targetRate - delta;
   const kcalAdjustment = Math.round((diffRate / 7) * 7700);
