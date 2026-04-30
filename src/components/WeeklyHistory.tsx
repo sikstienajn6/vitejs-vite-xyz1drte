@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { ChevronDown, Calendar, MessageSquare, Edit2, TrendingUp, TrendingDown, Minus, Target } from 'lucide-react';
+import { ChevronDown, Calendar, MessageSquare, Edit2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { WeeklySummary, WeightEntry, SettingsData, GoalPeriod } from '../lib/types';
 import { RATE_TOLERANCE_GREEN, RATE_TOLERANCE_ORANGE } from '../lib/constants';
 import { formatDate, getActiveRateForDate } from '../lib/utils';
@@ -91,7 +91,6 @@ function PeriodHeader({ period }: { period: GoalPeriod | null }) {
   const isGain = period.weeklyRate > 0;
   const isLoss = period.weeklyRate < 0;
 
-  const accentColor = isGain ? 'emerald' : isLoss ? 'rose' : 'slate';
   const barColor = isGain ? 'bg-emerald-500' : isLoss ? 'bg-rose-500' : 'bg-slate-500';
   const textColor = isGain ? 'text-emerald-400' : isLoss ? 'text-rose-400' : 'text-slate-400';
   const bgColor = isGain ? 'bg-emerald-500/5' : isLoss ? 'bg-rose-500/5' : 'bg-slate-500/5';
@@ -142,7 +141,7 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
           <div className="w-5"></div>
         </div>
 
-        {sections.map((section, sectionIdx) => (
+        {sections.map((section) => (
           <div key={section.period?.id || 'untracked'}>
             <PeriodHeader period={section.period} />
 
