@@ -233,11 +233,16 @@ export function useWeightData(user: User | null) {
     }
   };
 
-  const handleEditEntry = async (id: string, newWeight: number) => {
+  const handleEditEntry = async (id: string, newWeight: number, newComment?: string) => {
     if (!user) return;
     try {
       const entryRef = doc(db, 'users', user.uid, 'weights', id);
-      await setDoc(entryRef, { weight: newWeight }, { merge: true });
+      const updateData: Record<string, any> = { weight: newWeight };
+      // Allow comment to be set, updated, or cleared (empty string = remove)
+      if (newComment !== undefined) {
+        updateData.comment = newComment;
+      }
+      await setDoc(entryRef, updateData, { merge: true });
     } catch (err) {
       console.error("Edit error", err);
     }

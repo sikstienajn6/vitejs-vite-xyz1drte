@@ -30,8 +30,14 @@ export const formatTime = (timestamp: any) => {
 
 export const getDaysArray = (start: Date, end: Date) => {
   const arr: string[] = [];
-  for (let dt = new Date(start); dt <= end; dt.setDate(dt.getDate() + 1)) {
-    arr.push(new Date(dt).toISOString().split('T')[0]);
+  // Use UTC methods consistently to avoid timezone-related off-by-one bugs
+  const startStr = start.toISOString().split('T')[0];
+  const endStr = end.toISOString().split('T')[0];
+  let dt = new Date(startStr + 'T00:00:00Z');
+  const endDt = new Date(endStr + 'T00:00:00Z');
+  while (dt <= endDt) {
+    arr.push(dt.toISOString().split('T')[0]);
+    dt = new Date(dt.getTime() + 86400000); // Add exactly 24 hours
   }
   return arr;
 };

@@ -169,9 +169,13 @@ export function useWeightCalculations(
       }));
     } else {
       const now = new Date();
-      const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
-      const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
-      const earliestDataDate = new Date(weights[weights.length - 1]?.date || now);
+      const todayStr = now.toISOString().split('T')[0];
+      const latestWeightDateStr = weights.length > 0 ? weights[0].date : todayStr;
+      // Use the later of today or the latest weight date (as UTC date strings)
+      const chartEndStr = latestWeightDateStr > todayStr ? latestWeightDateStr : todayStr;
+      const chartEndDate = new Date(chartEndStr + 'T00:00:00Z');
+      const earliestDateStr = weights[weights.length - 1]?.date || todayStr;
+      const earliestDataDate = new Date(earliestDateStr + 'T00:00:00Z');
 
       const allDays = getDaysArray(earliestDataDate, chartEndDate);
 
@@ -208,17 +212,19 @@ export function useWeightCalculations(
     if (allChartData.length === 0) return [];
 
     const now = new Date();
-    const latestWeightDate = weights.length > 0 ? new Date(weights[0].date) : now;
-    const chartEndDate = latestWeightDate > now ? latestWeightDate : now;
+    const todayStr = now.toISOString().split('T')[0];
+    const latestWeightDateStr = weights.length > 0 ? weights[0].date : todayStr;
+    const chartEndStr = latestWeightDateStr > todayStr ? latestWeightDateStr : todayStr;
+    const chartEndDate = new Date(chartEndStr + 'T00:00:00Z');
     const earliestDataDate = allChartData[0].dateObj;
 
     let startDate: Date;
     if (filterRange === '1M') {
       startDate = new Date(chartEndDate);
-      startDate.setMonth(chartEndDate.getMonth() - 1);
+      startDate.setUTCMonth(chartEndDate.getUTCMonth() - 1);
     } else if (filterRange === '3M') {
       startDate = new Date(chartEndDate);
-      startDate.setMonth(chartEndDate.getMonth() - 3);
+      startDate.setUTCMonth(chartEndDate.getUTCMonth() - 3);
     } else {
       startDate = earliestDataDate;
     }

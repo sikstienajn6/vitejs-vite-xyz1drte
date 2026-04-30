@@ -6,18 +6,19 @@ import { formatDate, formatTime } from '../lib/utils';
 interface EntryDetailModalProps {
   entry: WeightEntry;
   onClose: () => void;
-  onEdit?: (id: string, weight: number) => void;
+  onEdit?: (id: string, weight: number, comment?: string) => void;
   onDelete?: (id: string) => void;
 }
 
 export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDetailModalProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [editWeight, setEditWeight] = useState(entry.weight.toString());
+  const [editComment, setEditComment] = useState(entry.comment || '');
 
   const handleSave = () => {
     const w = parseFloat(editWeight);
     if (!isNaN(w) && onEdit) {
-      onEdit(entry.id, w);
+      onEdit(entry.id, w, editComment);
       setIsEditing(false);
       onClose();
     }
@@ -36,10 +37,6 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
                   <div className="flex gap-2 items-end">
                      <input type="number" step="0.1" value={editWeight} onChange={e => setEditWeight(e.target.value)} className="w-24 bg-slate-800 border border-slate-700 text-white rounded-lg px-2 py-1 text-2xl font-bold text-center" />
                      <span className="text-lg text-slate-500 font-normal pb-1">kg</span>
-                  </div>
-                  <div className="flex gap-2 mt-2">
-                     <button onClick={handleSave} className="bg-emerald-500 text-white px-4 py-1.5 rounded-lg font-bold text-sm">Save</button>
-                     <button onClick={() => setIsEditing(false)} className="bg-slate-700 text-white px-4 py-1.5 rounded-lg font-bold text-sm">Cancel</button>
                   </div>
                </div>
             ) : (
@@ -62,7 +59,30 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
             </div>
           )}
 
-          {entry.comment && !entry.id.startsWith('weekly') && (
+          {isEditing && !entry.id.startsWith('weekly') && (
+            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
+                <MessageSquare size={12} /> Comment
+              </p>
+              <textarea
+                value={editComment}
+                onChange={e => setEditComment(e.target.value)}
+                placeholder="Add a comment..."
+                rows={2}
+                className="w-full bg-slate-800 border border-slate-700 text-white rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:border-blue-500 transition-colors placeholder-slate-600"
+              />
+              {editComment && (
+                <button
+                  onClick={() => setEditComment('')}
+                  className="mt-2 text-xs font-bold text-rose-400 hover:text-rose-300 transition-colors"
+                >
+                  Remove comment
+                </button>
+              )}
+            </div>
+          )}
+
+          {!isEditing && entry.comment && !entry.id.startsWith('weekly') && (
             <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-800">
               <p className="text-[10px] uppercase font-bold text-slate-500 mb-2 flex items-center gap-2">
                 <MessageSquare size={12} /> Comment
@@ -99,6 +119,13 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
             <div className="text-center text-sm text-slate-500 italic mt-2">
               Weekly Average
             </div>
+          )}
+
+          {!entry.id.startsWith('weekly') && isEditing && (
+             <div className="flex gap-2 justify-center mt-2 border-t border-slate-800 pt-4">
+                <button onClick={handleSave} className="bg-emerald-500 text-white px-4 py-1.5 rounded-lg font-bold text-sm">Save</button>
+                <button onClick={() => { setIsEditing(false); setEditComment(entry.comment || ''); }} className="bg-slate-700 text-white px-4 py-1.5 rounded-lg font-bold text-sm">Cancel</button>
+             </div>
           )}
 
           {!entry.id.startsWith('weekly') && !isEditing && (

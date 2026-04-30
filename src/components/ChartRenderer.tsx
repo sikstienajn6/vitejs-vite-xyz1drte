@@ -45,8 +45,8 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     if (allData.length === 0) return 0;
     const latestDate = allData[allData.length - 1].dateObj;
     let startDate = new Date(latestDate);
-    if (filterRange === '1M') startDate.setMonth(latestDate.getMonth() - 1);
-    else if (filterRange === '3M') startDate.setMonth(latestDate.getMonth() - 3);
+    if (filterRange === '1M') startDate.setUTCMonth(latestDate.getUTCMonth() - 1);
+    else if (filterRange === '3M') startDate.setUTCMonth(latestDate.getUTCMonth() - 3);
     else return allData.length;
 
     let count = 0;
