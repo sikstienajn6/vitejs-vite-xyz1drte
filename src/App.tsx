@@ -124,8 +124,6 @@ export default function App() {
 
           {data.view === 'settings' && (
             <SettingsView
-              goalType={data.goalType}
-              setGoalType={data.setGoalType}
               weeklyRate={data.weeklyRate}
               monthlyRate={data.monthlyRate}
               dailyCalories={data.dailyCalories}

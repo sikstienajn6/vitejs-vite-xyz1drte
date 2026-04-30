@@ -1,5 +1,6 @@
-import { ChevronDown, Calendar, MessageSquare, Edit2 } from 'lucide-react';
-import type { WeeklySummary, WeightEntry, SettingsData } from '../lib/types';
+import { useMemo } from 'react';
+import { ChevronDown, Calendar, MessageSquare, Edit2, TrendingUp, TrendingDown, Minus, Target } from 'lucide-react';
+import type { WeeklySummary, WeightEntry, SettingsData, GoalPeriod } from '../lib/types';
 import { RATE_TOLERANCE_GREEN, RATE_TOLERANCE_ORANGE } from '../lib/constants';
 import { formatDate, getActiveRateForDate } from '../lib/utils';
 import { getWeekTrendStatus } from '../hooks/useAdvice';
@@ -22,7 +23,105 @@ function getRateAdherenceColor(rate: number, settings: SettingsData | null, acti
   return 'text-rose-400';
 }
 
+interface PeriodSection {
+  period: GoalPeriod | null;  // null = untracked
+  weeks: WeeklySummary[];
+}
+
+function groupWeeksByPeriod(weeklyData: WeeklySummary[], goalPeriods: GoalPeriod[] | undefined): PeriodSection[] {
+  if (!goalPeriods || goalPeriods.length === 0) {
+    return [{ period: null, weeks: weeklyData }];
+  }
+
+  const sortedPeriods = [...goalPeriods].sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const sections: PeriodSection[] = [];
+  const periodMap = new Map<string, WeeklySummary[]>();
+  const untrackedWeeks: WeeklySummary[] = [];
+
+  // Initialize period buckets
+  for (const p of sortedPeriods) {
+    periodMap.set(p.id, []);
+  }
+
+  // Assign each week to a period
+  for (const week of weeklyData) {
+    const weekDate = week.entries.length > 0 ? week.entries[0].date : '';
+    if (!weekDate) { untrackedWeeks.push(week); continue; }
+
+    let assigned = false;
+    for (const p of sortedPeriods) {
+      if (p.startDate <= weekDate && (p.endDate === null || p.endDate >= weekDate)) {
+        periodMap.get(p.id)!.push(week);
+        assigned = true;
+        break;
+      }
+    }
+    if (!assigned) {
+      untrackedWeeks.push(week);
+    }
+  }
+
+  // Build sections in reverse chronological order (newest period first)
+  for (let i = sortedPeriods.length - 1; i >= 0; i--) {
+    const p = sortedPeriods[i];
+    const weeks = periodMap.get(p.id)!;
+    if (weeks.length > 0) {
+      sections.push({ period: p, weeks });
+    }
+  }
+
+  if (untrackedWeeks.length > 0) {
+    sections.push({ period: null, weeks: untrackedWeeks });
+  }
+
+  return sections;
+}
+
+function PeriodHeader({ period }: { period: GoalPeriod | null }) {
+  if (!period) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-800/40 border-b border-slate-700/30">
+        <div className="w-1 h-4 bg-slate-600 rounded-full" />
+        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Untracked</span>
+      </div>
+    );
+  }
+
+  const isOpen = period.endDate === null;
+  const isGain = period.weeklyRate > 0;
+  const isLoss = period.weeklyRate < 0;
+
+  const accentColor = isGain ? 'emerald' : isLoss ? 'rose' : 'slate';
+  const barColor = isGain ? 'bg-emerald-500' : isLoss ? 'bg-rose-500' : 'bg-slate-500';
+  const textColor = isGain ? 'text-emerald-400' : isLoss ? 'text-rose-400' : 'text-slate-400';
+  const bgColor = isGain ? 'bg-emerald-500/5' : isLoss ? 'bg-rose-500/5' : 'bg-slate-500/5';
+
+  return (
+    <div className={`flex items-center justify-between px-4 py-2.5 ${bgColor} border-b border-slate-700/30`}>
+      <div className="flex items-center gap-2.5">
+        <div className={`w-1 h-5 ${barColor} rounded-full`} />
+        <div className="flex flex-col">
+          <span className="text-xs font-bold text-slate-300">
+            {formatDate(period.startDate)} – {isOpen ? 'Present' : formatDate(period.endDate!)}
+          </span>
+        </div>
+      </div>
+      <div className={`flex items-center gap-1.5 ${textColor}`}>
+        {isGain ? <TrendingUp size={13} /> : isLoss ? <TrendingDown size={13} /> : <Minus size={13} />}
+        <span className="text-xs font-bold">
+          {period.weeklyRate > 0 ? '+' : ''}{period.weeklyRate} kg/wk
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWeek, onExportCsv, onSelectEntry }: WeeklyHistoryProps) {
+  const sections = useMemo(
+    () => groupWeeksByPeriod(weeklyData, settings?.goalPeriods),
+    [weeklyData, settings?.goalPeriods]
+  );
+
   return (
     <section>
       <div className="flex items-center justify-between mb-3 px-1 gap-3">
@@ -42,95 +141,102 @@ export function WeeklyHistory({ weeklyData, settings, expandedWeeks, onToggleWee
           <div className="text-right pr-4">Δ</div>
           <div className="w-5"></div>
         </div>
-        <div className="divide-y divide-slate-800">
-          {weeklyData.slice().reverse().map((item) => {
-            const isExpanded = expandedWeeks.includes(item.weekId);
-            const weekDate = item.entries.length > 0 ? item.entries[0].date : '';
-            const activeRate = weekDate ? getActiveRateForDate(weekDate, settings?.goalPeriods) : null;
-            const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta, settings, activeRate);
-            return (
-              <div key={item.weekId} className="transition-colors">
-                <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer" onClick={() => onToggleWeek(item.weekId)}>
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
-                    <span className="text-[10px] text-slate-500">{item.count} entries</span>
-                  </div>
-                  <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
-                  <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
-                    {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
-                  </div>
-                  <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
-                </div>
-                <div 
-                  className={`grid transition-all duration-300 ease-in-out ${
-                    isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-                  }`}
-                >
-                  <div className="overflow-hidden">
-                    {(() => {
-                      // Determine if this week is complete (current date is past the following Monday)
-                      const weekEntryDates = item.entries.map(e => new Date(e.date));
-                      const latestEntryDate = new Date(Math.max(...weekEntryDates.map(d => d.getTime())));
-                      const dayOfWeek = latestEntryDate.getDay(); // 0=Sun..6=Sat
-                      const daysUntilNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
-                      const nextMonday = new Date(latestEntryDate);
-                      nextMonday.setDate(latestEntryDate.getDate() + daysUntilNextMonday);
-                      nextMonday.setHours(0, 0, 0, 0);
-                      const now = new Date();
-                      const isWeekComplete = now >= nextMonday;
 
-                      const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings, activeRate) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
-                      return (
-                        <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
-                          {isWeekComplete && (
-                            <div className="flex flex-col gap-2 mb-2">
-                              <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
-                                <span>Daily Entries</span>
-                                <span className={trendStatus.color}>{trendStatus.text}</span>
-                              </div>
-                              <div className="text-[10px] text-slate-400">
-                                {trendStatus.advice}
-                              </div>
-                            </div>
-                          )}
-                          {!isWeekComplete && (
-                            <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold mb-2">
-                              <span>Daily Entries</span>
-                              <span className="text-slate-600">In progress</span>
-                            </div>
-                          )}
-                          <div className="space-y-2">
-                            {item.entries.slice().reverse().map((entry) => (
-                              <div
-                                key={entry.id}
-                                className="flex justify-between items-center text-sm p-1 rounded hover:bg-slate-800 cursor-pointer transition-colors"
-                                onClick={() => onSelectEntry(entry)}
-                              >
-                                <div className="flex items-center gap-2 text-slate-500">
-                                  <Calendar size={12} /><span>{formatDate(entry.date)}</span>
-                                  {entry.comment && <MessageSquare size={12} className="text-blue-400" />}
+        {sections.map((section, sectionIdx) => (
+          <div key={section.period?.id || 'untracked'}>
+            <PeriodHeader period={section.period} />
+
+            <div className="divide-y divide-slate-800/60">
+              {section.weeks.slice().reverse().map((item) => {
+                const isExpanded = expandedWeeks.includes(item.weekId);
+                const weekDate = item.entries.length > 0 ? item.entries[0].date : '';
+                const activeRate = weekDate ? getActiveRateForDate(weekDate, settings?.goalPeriods) : null;
+                const rateColor = !item.hasPrev ? 'text-slate-600' : getRateAdherenceColor(item.delta, settings, activeRate);
+                return (
+                  <div key={item.weekId} className="transition-colors">
+                    <div className="grid grid-cols-[1.5fr_1fr_1fr_auto] gap-2 px-4 py-3 items-center cursor-pointer hover:bg-slate-800/30 transition-colors" onClick={() => onToggleWeek(item.weekId)}>
+                      <div className="flex flex-col">
+                        <span className="text-sm font-semibold text-slate-200">{item.weekLabel}</span>
+                        <span className="text-[10px] text-slate-500">{item.count} entries</span>
+                      </div>
+                      <div className="text-right font-bold text-slate-200">{item.actual.toFixed(1)}</div>
+                      <div className={`text-right pr-4 font-bold text-xs ${rateColor}`}>
+                        {item.hasPrev ? (item.delta > 0 ? `+${item.delta.toFixed(2)}` : item.delta.toFixed(2)) : '-'}
+                      </div>
+                      <div className="flex justify-end text-slate-500"><ChevronDown size={16} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} /></div>
+                    </div>
+                    <div 
+                      className={`grid transition-all duration-300 ease-in-out ${
+                        isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                      }`}
+                    >
+                      <div className="overflow-hidden">
+                        {(() => {
+                          // Determine if this week is complete (current date is past the following Monday)
+                          const weekEntryDates = item.entries.map(e => new Date(e.date));
+                          const latestEntryDate = new Date(Math.max(...weekEntryDates.map(d => d.getTime())));
+                          const dayOfWeek = latestEntryDate.getDay(); // 0=Sun..6=Sat
+                          const daysUntilNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+                          const nextMonday = new Date(latestEntryDate);
+                          nextMonday.setDate(latestEntryDate.getDate() + daysUntilNextMonday);
+                          nextMonday.setHours(0, 0, 0, 0);
+                          const now = new Date();
+                          const isWeekComplete = now >= nextMonday;
+
+                          const trendStatus = item.hasPrev ? getWeekTrendStatus(item.delta, settings, activeRate) : { status: 'ok', text: 'Trend: On Track', color: 'text-emerald-500', advice: 'On track. Maintain current calories.' };
+                          return (
+                            <div className="bg-slate-950/50 px-4 py-2 border-t border-slate-800">
+                              {isWeekComplete && (
+                                <div className="flex flex-col gap-2 mb-2">
+                                  <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold">
+                                    <span>Daily Entries</span>
+                                    <span className={trendStatus.color}>{trendStatus.text}</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400">
+                                    {trendStatus.advice}
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="font-medium text-slate-300">{entry.weight} kg</span>
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); onSelectEntry(entry); }}
-                                    className="text-slate-600 hover:text-blue-400 p-1"
+                              )}
+                              {!isWeekComplete && (
+                                <div className="flex justify-between text-[10px] text-slate-500 uppercase font-bold mb-2">
+                                  <span>Daily Entries</span>
+                                  <span className="text-slate-600">In progress</span>
+                                </div>
+                              )}
+                              <div className="space-y-2">
+                                {item.entries.slice().reverse().map((entry) => (
+                                  <div
+                                    key={entry.id}
+                                    className="flex justify-between items-center text-sm p-1 rounded hover:bg-slate-800 cursor-pointer transition-colors"
+                                    onClick={() => onSelectEntry(entry)}
                                   >
-                                    <Edit2 size={12} />
-                                  </button>
-                                </div>
+                                    <div className="flex items-center gap-2 text-slate-500">
+                                      <Calendar size={12} /><span>{formatDate(entry.date)}</span>
+                                      {entry.comment && <MessageSquare size={12} className="text-blue-400" />}
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      <span className="font-medium text-slate-300">{entry.weight} kg</span>
+                                      <button
+                                        onClick={(e) => { e.stopPropagation(); onSelectEntry(entry); }}
+                                        className="text-slate-600 hover:text-blue-400 p-1"
+                                      >
+                                        <Edit2 size={12} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );

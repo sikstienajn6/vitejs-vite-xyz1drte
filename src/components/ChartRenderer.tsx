@@ -472,7 +472,7 @@ export function ChartRenderer({ allData, mode, filterRange, height, width, setti
     const rightEdgeDateMs = renderVisRightDateMs + Math.max(7*msPerDay, Math.abs(renderVisRightDateMs - renderVisLeftDateMs) / 2);
 
     projectionSegments.forEach(seg => {
-      const drawStartMs = Math.max(seg.startDateMs, leftEdgeDateMs);
+      const drawStartMs = leftEdgeDateMs;
       const drawEndMs = Math.min(seg.endDateMs, rightEdgeDateMs);
       
       if (drawStartMs >= drawEndMs) return;

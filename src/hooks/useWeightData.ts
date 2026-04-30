@@ -20,7 +20,6 @@ export function useWeightData(user: User | null) {
   const [dismissedAdviceWeeks, setDismissedAdviceWeeks] = useState<string[]>([]);
 
   // Settings form state
-  const [goalType, setGoalType] = useState<'gain' | 'lose'>('gain');
   const [weeklyRate, setWeeklyRate] = useState('0.2');
   const [monthlyRate, setMonthlyRate] = useState('0.87');
   const [dailyCalories, setDailyCalories] = useState('');
@@ -82,12 +81,9 @@ export function useWeightData(user: User | null) {
         setSettings(s);
 
         const wRate = s.weeklyRate ? s.weeklyRate : 0;
-        const isNegative = wRate < 0;
-        const absRate = Math.abs(wRate);
 
-        setGoalType(isNegative ? 'lose' : 'gain');
-        setWeeklyRate(absRate.toString());
-        setMonthlyRate((absRate * 4.345).toFixed(2));
+        setWeeklyRate(wRate.toString());
+        setMonthlyRate((wRate * 4.345).toFixed(2));
         setDailyCalories(s.dailyCalories ? s.dailyCalories.toString() : '');
       } else {
         setSettings(null);
@@ -116,11 +112,8 @@ export function useWeightData(user: User | null) {
   const resetSettingsForm = () => {
     if (settings) {
       const wRate = settings.weeklyRate || 0;
-      const isNegative = wRate < 0;
-      const absRate = Math.abs(wRate);
-      setGoalType(isNegative ? 'lose' : 'gain');
-      setWeeklyRate(absRate.toString());
-      setMonthlyRate((absRate * 4.345).toFixed(2));
+      setWeeklyRate(wRate.toString());
+      setMonthlyRate((wRate * 4.345).toFixed(2));
       setDailyCalories(settings.dailyCalories ? settings.dailyCalories.toString() : '');
     }
   };
@@ -132,8 +125,8 @@ export function useWeightData(user: User | null) {
 
   const handleRateChange = (val: string, type: 'weekly' | 'monthly') => {
     const sanitizedVal = val.replace(',', '.');
-    if (sanitizedVal === '') { setWeeklyRate(''); setMonthlyRate(''); return; }
-    if (sanitizedVal === '.') { type === 'weekly' ? setWeeklyRate('.') : setMonthlyRate('.'); return; }
+    if (sanitizedVal === '' || sanitizedVal === '-') { setWeeklyRate(sanitizedVal); setMonthlyRate(sanitizedVal === '-' ? '-' : ''); return; }
+    if (sanitizedVal === '.' || sanitizedVal === '-.') { type === 'weekly' ? setWeeklyRate(sanitizedVal) : setMonthlyRate(sanitizedVal); return; }
     const num = parseFloat(sanitizedVal);
     if (isNaN(num)) { type === 'weekly' ? setWeeklyRate(sanitizedVal) : setMonthlyRate(sanitizedVal); return; }
     if (type === 'weekly') {
@@ -169,9 +162,8 @@ export function useWeightData(user: User | null) {
     e.preventDefault();
     if (!user) return;
     try {
-      let rate = parseFloat(weeklyRate);
-      if (goalType === 'lose') rate = -Math.abs(rate);
-      else rate = Math.abs(rate);
+      const rate = parseFloat(weeklyRate);
+      if (isNaN(rate)) return;
 
       const cals = dailyCalories ? parseInt(dailyCalories) : 0;
 
@@ -315,8 +307,6 @@ export function useWeightData(user: User | null) {
     settings,
     dismissedAdviceWeeks,
     view,
-    goalType,
-    setGoalType,
     weeklyRate,
     monthlyRate,
     dailyCalories,
