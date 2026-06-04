@@ -64,23 +64,12 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
 
           {/* Info cards */}
           {!isWeekly && !isEditing && (
-            <div className="grid grid-cols-2 gap-2">
-              <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/50">
-                <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time</p>
-                <p className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
-                  <Clock size={13} className="text-blue-400" />
-                  {formatTime(entry.createdAt) || '--:--'}
-                </p>
-              </div>
-              {entry.comment && (
-                <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/50">
-                  <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Comment</p>
-                  <p className="text-sm text-slate-200 truncate">
-                    <MessageSquare size={13} className="text-blue-400 inline mr-1" />
-                    {entry.comment}
-                  </p>
-                </div>
-              )}
+            <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/50">
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time</p>
+              <p className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+                <Clock size={13} className="text-blue-400" />
+                {formatTime(entry.createdAt) || '--:--'}
+              </p>
             </div>
           )}
 
