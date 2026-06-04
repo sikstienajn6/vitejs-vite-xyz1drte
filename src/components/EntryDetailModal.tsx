@@ -31,8 +31,14 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-sm shadow-2xl relative animate-modal-in overflow-hidden" onClick={e => e.stopPropagation()}>
         {/* Header bar */}
         <div className="flex items-center justify-between px-5 pt-4 pb-2">
-          <p className="text-sm font-semibold text-slate-400">
+          <p className="text-sm font-semibold text-slate-400 flex items-center gap-2">
             {isWeekly ? entry.date : formatDate(entry.date)}
+            {!isWeekly && (
+              <span className="flex items-center gap-1 text-slate-500">
+                <Clock size={12} className="text-blue-400" />
+                {formatTime(entry.createdAt) || '--:--'}
+              </span>
+            )}
           </p>
           <button onClick={onClose} className="p-1.5 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-all duration-200">
             <X size={18} />
@@ -62,16 +68,7 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
             )}
           </div>
 
-          {/* Info cards */}
-          {!isWeekly && !isEditing && (
-            <div className="bg-slate-800/60 p-3 rounded-xl border border-slate-700/50">
-              <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Time</p>
-              <p className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
-                <Clock size={13} className="text-blue-400" />
-                {formatTime(entry.createdAt) || '--:--'}
-              </p>
-            </div>
-          )}
+
 
           {/* Comment section when editing */}
           {isEditing && !isWeekly && (
@@ -100,6 +97,9 @@ export function EntryDetailModal({ entry, onClose, onEdit, onDelete }: EntryDeta
           {/* Full comment view (non-editing) */}
           {!isEditing && entry.comment && !isWeekly && (
             <div className="bg-slate-800/40 p-3.5 rounded-xl border border-slate-700/30">
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-1.5 flex items-center gap-1.5">
+                <MessageSquare size={11} /> Comment
+              </p>
               <p className="text-sm text-slate-200 italic whitespace-pre-wrap leading-relaxed">{entry.comment}</p>
             </div>
           )}
